@@ -102,7 +102,7 @@ def test_collect_uses_and_reads_pinned_cli_detail_output(monkeypatch):
     )
 
     assert "--detail-output" in observed["args"]
-    assert observed["args"][observed["args"].index("--pages") + 1] == "3"
+    assert observed["args"][observed["args"].index("--pages") + 1] == "2"
     assert "--detail" in observed["args"]
     assert "--max-details" not in observed["args"]
     assert observed["timeout"] == 6000
@@ -112,7 +112,7 @@ def test_collect_uses_and_reads_pinned_cli_detail_output(monkeypatch):
     ] == ["406", "105", "203"]
     assert [job.id for job in jobs] == ["cli-job"]
     assert jobs.summary.total_jobs == jobs.summary.total_details == 1
-    assert jobs.summary.pages == 3
+    assert jobs.summary.pages == 2
     assert jobs.summary.filters == {"experience": "3-5年", "degree": "本科", "salary": "20-30K"}
     assert "岗位市场摘要: Python @ 上海" in jobs.summary.formatted_summary
 

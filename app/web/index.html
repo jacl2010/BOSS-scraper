@@ -91,7 +91,7 @@
           <div class="panel-head compact"><div><p class="kicker">监控条件</p><h3>为这份简历单独设置</h3></div><label class="switch"><input v-model="conditionForm.monitor_enabled" type="checkbox" :disabled="selectedResume.status !== 'ready'" @change="saveConditions"><span></span>参与匹配</label></div>
           <div class="condition-grid">
             <label>岗位关键词<input v-model.trim="conditionForm.job_keyword" placeholder="Python 后端"></label>
-            <label>城市（中文或 9 位代码）<input v-model.trim="conditionForm.city" placeholder="北京"><small class="form-hint">默认北京，支持全国 300+ 城市；本次固定采集第 1~3 页。</small></label>
+            <label>城市（中文或 9 位代码）<input v-model.trim="conditionForm.city" placeholder="北京"><small class="form-hint">默认北京，支持全国 300+ 城市；本次固定采集第 1~2 页。</small></label>
             <label>工作经验<input v-model.trim="conditionForm.experience" placeholder="不限"></label>
             <label>学历<input v-model.trim="conditionForm.degree" placeholder="不限"></label>
             <label>薪资<input v-model.trim="conditionForm.salary" placeholder="不限"></label>
@@ -120,7 +120,7 @@
         <article class="panel results-panel">
           <div class="panel-head"><div><p class="kicker">最近结果</p><h2>按简历查看 Top 10</h2></div><select v-model="resultResumeId" @change="loadResults"><option value="">选择简历</option><option v-for="resume in resumes" :key="resume.id" :value="resume.id">{{ resume.profile?.title || resume.filename }}</option></select></div>
           <div v-if="resultResumeId" class="result-query" aria-label="本次采集条件">
-            <span>本次采集</span><strong>关键词：{{ collectionSummary?.keyword || resultQuery.keyword }}</strong><strong>城市：{{ collectionSummary?.city || resultQuery.city }}</strong><strong>经验：{{ resultQuery.experience }}</strong><strong>学历：{{ resultQuery.degree }}</strong><strong>薪资：{{ resultQuery.salary }}</strong><strong>页数：1~{{ collectionSummary?.pages || 3 }}</strong><small v-if="collectionSummary?.collected_at || results.matched_at">采集时间：{{ formatTime(collectionSummary?.collected_at || results.matched_at) }}</small>
+            <span>本次采集</span><strong>关键词：{{ collectionSummary?.keyword || resultQuery.keyword }}</strong><strong>城市：{{ collectionSummary?.city || resultQuery.city }}</strong><strong>经验：{{ resultQuery.experience }}</strong><strong>学历：{{ resultQuery.degree }}</strong><strong>薪资：{{ resultQuery.salary }}</strong><strong>页数：1~{{ collectionSummary?.pages || 2 }}</strong><small v-if="collectionSummary?.collected_at || results.matched_at">采集时间：{{ formatTime(collectionSummary?.collected_at || results.matched_at) }}</small>
           </div>
           <section v-if="resultResumeId" class="collection-summary" aria-label="采集岗位市场摘要">
             <div class="collection-summary-head"><div><p class="kicker">岗位市场摘要</p><h3>基于本次详情 JD 汇总</h3></div><small v-if="collectionSummary">详情 {{ collectionSummary.total_details ?? 0 }}/{{ collectionSummary.total_jobs ?? 0 }} 个岗位</small></div>
