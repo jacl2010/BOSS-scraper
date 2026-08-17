@@ -56,12 +56,13 @@ def create_app(database: Database | None = None, llm=None, boss=None) -> FastAPI
         return LlmSettingsView(
             **settings,
             key_configured=bool(os.environ.get("BOSS_MATCHER_LLM_API_KEY", "").strip()),
+            api_key_masked=LlmService.mask_key(os.environ.get("BOSS_MATCHER_LLM_API_KEY")),
         )
 
     @app.put("/api/llm-settings")
     def put_llm_settings(payload: LlmSettingsInput):
         try:
-            return llm.test_and_save(payload)
+            return llm.test_and_save(payload, payload.api_key)
         except ValueError as exc:
             message = str(exc)
             if "BOSS_MATCHER_LLM_API_KEY" not in message:

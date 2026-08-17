@@ -9,8 +9,8 @@ createApp({
         { route: '/matches', code: 'AI', label: 'BOSS 岗位匹配' },
         { route: '/llm', code: 'KEY', label: 'LLM API Key' },
       ],
-      llm: { base_url: '', model: '', key_configured: false, tested_at: null },
-      llmForm: { base_url: '', model: '' },
+      llm: { base_url: '', model: '', key_configured: false, api_key_masked: '', tested_at: null },
+      llmForm: { base_url: '', model: '', api_key: '' },
       resumes: [], selectedResumeId: '', resultResumeId: '',
       conditionForm: { job_keyword: '', city: '', experience: '不限', degree: '不限', salary: '不限', monitor_enabled: false },
       boss: { state: 'unknown', message: '' },
@@ -30,7 +30,7 @@ createApp({
       return {
         '/resumes': { eyebrow: 'RESUME WORKBENCH', title: '把简历变成可匹配的信号', description: '上传文本型 PDF，检查 AI 摘要，并为每份简历保存独立条件。' },
         '/matches': { eyebrow: 'MANUAL MATCH RUN', title: '只在你点击时开始匹配', description: '先做五项硬过滤，再由 LLM 评分，保留两个互斥 Top 10。' },
-        '/llm': { eyebrow: 'MODEL CONNECTION', title: '连接你信任的大模型', description: '页面只保存服务地址和模型；密钥始终停留在环境变量中。' },
+        '/llm': { eyebrow: 'MODEL CONNECTION', title: '连接你信任的大模型', description: '在页面测试配置，Key 成功后只保存在本机 .env。' },
       }[this.route] || { eyebrow: '', title: '', description: '' };
     },
     selectedResume() { return this.resumes.find((item) => item.id === this.selectedResumeId); },
@@ -61,10 +61,16 @@ createApp({
       else if (this.matchStatus.status === 'running') this.beginPolling();
     },
     flash(text, type = 'info') { this.notice = { text, type }; },
-    async loadLlm() { const data = await this.api('/api/llm-settings'); if (data) { this.llm = data; this.llmForm = { base_url: data.base_url, model: data.model }; } },
+    async loadLlm() { const data = await this.api('/api/llm-settings'); if (data) { this.llm = data; this.llmForm = { base_url: data.base_url, model: data.model, api_key: '' }; } },
     async saveLlm() {
       this.busy.llm = true;
-      try { this.llm = await this.api('/api/llm-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(this.llmForm) }); this.flash('大模型连接已验证并保存。', 'success'); }
+      try {
+        const payload = { base_url: this.llmForm.base_url, model: this.llmForm.model };
+        if (this.llmForm.api_key) payload.api_key = this.llmForm.api_key;
+        this.llm = await this.api('/api/llm-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        this.llmForm.api_key = '';
+        this.flash('大模型连接已验证，Key 已保存到本机 .env。', 'success');
+      }
       catch (error) { this.flash(error.message, 'error'); } finally { this.busy.llm = false; }
     },
     async loadResumes() { this.resumes = await this.api('/api/resumes'); if (!this.selectedResumeId && this.resumes.length) this.selectResume(this.resumes[0].id); },

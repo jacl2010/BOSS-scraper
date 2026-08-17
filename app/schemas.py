@@ -13,6 +13,7 @@ class LlmSettingsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     base_url: str = Field(min_length=1)
     model: str = Field(min_length=1)
+    api_key: str | None = Field(default=None, min_length=1)
 
     @field_validator("base_url")
     @classmethod
@@ -30,6 +31,7 @@ class LlmSettingsInput(BaseModel):
 class LlmSettingsView(BaseModel):
     base_url: str
     key_configured: bool
+    api_key_masked: str
     model: str
     tested_at: datetime
 

@@ -1,11 +1,14 @@
 import sqlite3
+from pathlib import Path
 
 import fitz
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.database import Database
 from app.llm import LlmService
+from app.main import create_app
 from app.resumes import ResumeError, ResumeService
 from app.schemas import LlmSettingsInput, ResumeProfile
 
@@ -52,7 +55,7 @@ def pdf_bytes(text="Python resume"):
 def test_llm_configuration_saves_only_non_secret_fields(database, monkeypatch):
     monkeypatch.setenv("BOSS_MATCHER_LLM_API_KEY", "private-key")
     llm = LlmService(database)
-    monkeypatch.setattr(llm, "test_settings", lambda settings: True)
+    monkeypatch.setattr(llm, "test_settings", lambda settings, api_key=None: True)
     settings = llm.test_and_save(LlmSettingsInput(base_url="https://example.test/v1", model="test"))
 
     assert settings.key_configured is True
@@ -68,6 +71,90 @@ def test_llm_requires_environment_key(database, monkeypatch):
         LlmService(database).test_and_save(
             LlmSettingsInput(base_url="https://example.test/v1", model="test")
         )
+
+
+def test_llm_connection_test_uses_basic_chat_completion(database, monkeypatch):
+    class BasicChatClient:
+        def __init__(self):
+            self.prompts = []
+
+        def invoke(self, prompt):
+            self.prompts.append(prompt)
+            return object()
+
+    client = BasicChatClient()
+    llm = LlmService(database)
+    monkeypatch.setattr(llm, "_client", lambda settings, api_key=None: client)
+
+    assert llm.test_settings(
+        LlmSettingsInput(base_url="https://api.deepseek.com", model="deepseek-v4-flash"),
+        api_key="sk-test-secret",
+    ) is True
+    assert client.prompts == ["Reply with exactly: OK"]
+
+
+def test_llm_key_is_written_to_local_env_only_after_success(database, tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    monkeypatch.delenv("BOSS_MATCHER_LLM_API_KEY", raising=False)
+    llm = LlmService(database, env_path=env_path)
+    monkeypatch.setattr(llm, "test_settings", lambda settings, api_key=None: True)
+
+    result = llm.test_and_save(
+        LlmSettingsInput(base_url="https://example.test/v1", model="test"),
+        api_key="sk-test-secret",
+    )
+
+    assert env_path.read_text(encoding="utf-8") == "BOSS_MATCHER_LLM_API_KEY=sk-test-secret\n"
+    assert result.key_configured is True
+    assert result.api_key_masked == "sk-****cret"
+    assert "sk-test-secret" not in result.model_dump_json()
+    assert "sk-test-secret" not in repr(database.get_llm_settings())
+
+
+def test_failed_llm_key_test_does_not_overwrite_existing_env(database, tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text("BOSS_MATCHER_LLM_API_KEY=old-secret\n", encoding="utf-8")
+    llm = LlmService(database, env_path=env_path)
+    monkeypatch.setattr(llm, "test_settings", lambda settings, api_key=None: (_ for _ in ()).throw(ValueError("bad key")))
+
+    with pytest.raises(ValueError, match="bad key"):
+        llm.test_and_save(
+            LlmSettingsInput(base_url="https://example.test/v1", model="test"),
+            api_key="sk-new-secret",
+        )
+
+    assert env_path.read_text(encoding="utf-8") == "BOSS_MATCHER_LLM_API_KEY=old-secret\n"
+
+
+def test_llm_key_rejects_newline(database, tmp_path):
+    llm = LlmService(database, env_path=Path(tmp_path) / ".env")
+    with pytest.raises(ValueError, match="格式无效"):
+        llm.test_and_save(
+            LlmSettingsInput(base_url="https://example.test/v1", model="test"),
+            api_key="secret\nINJECTED=value",
+        )
+
+
+def test_api_llm_settings_writes_key_to_env_and_returns_mask(tmp_path, monkeypatch):
+    database = Database(tmp_path / "app.db", tmp_path / "resumes")
+    llm = LlmService(database, env_path=tmp_path / ".env")
+    monkeypatch.delenv("BOSS_MATCHER_LLM_API_KEY", raising=False)
+    monkeypatch.setattr(llm, "test_settings", lambda settings, api_key=None: True)
+    client = TestClient(create_app(database=database, llm=llm))
+
+    response = client.put(
+        "/api/llm-settings",
+        json={
+            "base_url": "https://example.test/v1",
+            "model": "test",
+            "api_key": "sk-api-secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["api_key_masked"] == "sk-****cret"
+    assert "sk-api-secret" not in response.text
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "BOSS_MATCHER_LLM_API_KEY=sk-api-secret\n"
 
 
 def test_llm_rejects_remote_plain_http_but_allows_loopback():

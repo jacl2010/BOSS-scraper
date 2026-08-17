@@ -45,18 +45,19 @@
 
       <section v-if="route === '/llm'" class="content-grid narrow">
         <article class="panel form-panel">
-          <div class="panel-head"><div><p class="kicker">连接设置</p><h2>大模型服务</h2></div><span class="badge" :class="llm.key_configured ? 'ok' : 'warn'">{{ llm.key_configured ? '环境变量已就绪' : '缺少环境变量' }}</span></div>
+          <div class="panel-head"><div><p class="kicker">连接设置</p><h2>大模型服务</h2></div><span class="badge" :class="llm.key_configured ? 'ok' : 'warn'">{{ llm.key_configured ? 'Key 已配置' : '待配置 Key' }}</span></div>
           <label>服务地址<input v-model.trim="llmForm.base_url" type="url" placeholder="https://api.example.com/v1" autocomplete="off"></label>
           <label>模型标识<input v-model.trim="llmForm.model" type="text" placeholder="deepseek-v4flash" autocomplete="off"></label>
+          <label>API Key<input v-model.trim="llmForm.api_key" type="password" placeholder="输入后保存到本机 .env" autocomplete="new-password"></label>
           <div class="secret-boundary">
-            <strong>API Key 不在页面填写</strong>
-            <p>启动前设置 <code>BOSS_MATCHER_LLM_API_KEY</code>。Key 不进入请求体、SQLite、页面或日志。</p>
+            <strong>Key 只保存在本机</strong>
+            <p>测试成功后写入项目根目录 <code>.env</code> 的 <code>BOSS_MATCHER_LLM_API_KEY</code>。该文件已被 Git 忽略，不提交、不 push。</p>
           </div>
           <button class="primary" type="button" :disabled="busy.llm || !llmForm.base_url || !llmForm.model" @click="saveLlm">
             {{ busy.llm ? '正在验证…' : '测试并保存' }}
           </button>
         </article>
-        <aside class="panel quiet-panel"><p class="kicker">当前状态</p><h2>{{ llm.tested_at ? '已通过连接测试' : '尚未验证' }}</h2><dl><dt>模型</dt><dd>{{ llm.model || '—' }}</dd><dt>最近测试</dt><dd>{{ formatTime(llm.tested_at) }}</dd></dl></aside>
+        <aside class="panel quiet-panel"><p class="kicker">当前状态</p><h2>{{ llm.tested_at ? '已通过连接测试' : '尚未验证' }}</h2><dl><dt>模型</dt><dd>{{ llm.model || '—' }}</dd><dt>Key</dt><dd>{{ llm.api_key_masked || '未配置' }}</dd><dt>最近测试</dt><dd>{{ formatTime(llm.tested_at) }}</dd></dl></aside>
       </section>
 
       <section v-if="route === '/resumes'" class="resume-layout">

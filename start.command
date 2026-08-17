@@ -22,7 +22,7 @@ export UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/s
 print "正在检查本地依赖…"
 uv sync --frozen || fail "依赖同步失败。请检查网络后重试。"
 
-if [[ -z "${BOSS_MATCHER_LLM_API_KEY:-}" ]]; then
+if [[ -z "${BOSS_MATCHER_LLM_API_KEY:-}" ]] && { [[ ! -f .env ]] || ! grep -q '^BOSS_MATCHER_LLM_API_KEY=' .env; }; then
   print "提示：尚未设置 BOSS_MATCHER_LLM_API_KEY。页面可以启动，但需设置后重新启动才能使用 LLM。"
 fi
 
