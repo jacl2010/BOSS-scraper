@@ -1,4 +1,5 @@
 import sqlite3
+import json
 from pathlib import Path
 
 import fitz
@@ -10,7 +11,7 @@ from app.database import Database
 from app.llm import LlmService
 from app.main import create_app
 from app.resumes import ResumeError, ResumeService
-from app.schemas import LlmSettingsInput, ResumeProfile
+from app.schemas import CanonicalJob, LlmSettingsInput, ResumeProfile, ScoredJob
 
 
 class FakeLlm:
@@ -182,6 +183,106 @@ def test_llm_connection_test_uses_basic_chat_completion(database, monkeypatch):
         api_key="sk-test-secret",
     ) is True
     assert client.prompts == ["Reply with exactly: OK"]
+
+
+def test_resume_parse_uses_json_mode_with_explicit_schema(database, monkeypatch):
+    profile = ResumeProfile(
+        title="Python 工程师",
+        summary="后端开发经验",
+        tags=["Python"],
+        skills=["FastAPI"],
+        years_experience=3,
+        education="本科",
+        target_roles=["Python 工程师"],
+        highlights=["交付本地服务"],
+    )
+    captured = {}
+
+    class JsonModeChain:
+        def invoke(self, prompt):
+            captured["prompt"] = prompt
+            return profile
+
+    class JsonModeOnlyClient:
+        def with_structured_output(self, schema, *, method=None):
+            captured["schema"] = schema
+            captured["method"] = method
+            return JsonModeChain()
+
+    llm = LlmService(database)
+    monkeypatch.setattr(llm, "_client", lambda settings, api_key=None: JsonModeOnlyClient())
+
+    result = llm.parse_resume(
+        {"base_url": "https://api.deepseek.com", "model": "deepseek-v4-flash"},
+        "3 年 Python 开发经验",
+    )
+
+    expected_schema = json.dumps(ResumeProfile.model_json_schema(), ensure_ascii=False)
+    assert result == profile
+    assert captured["schema"] is ResumeProfile
+    assert captured["method"] == "json_mode"
+    assert expected_schema in captured["prompt"]
+
+
+def test_job_scoring_uses_json_mode_with_explicit_schema(database, monkeypatch):
+    captured = {}
+
+    class JsonModeChain:
+        def invoke(self, prompt):
+            captured["prompt"] = prompt
+            return type(
+                "ScoredBatchResult",
+                (),
+                {
+                    "results": [
+                        ScoredJob(
+                            job_id="job-1",
+                            score=90,
+                            reason="技术栈匹配",
+                            strengths=["Python"],
+                            gaps=[],
+                        )
+                    ]
+                },
+            )()
+
+    class JsonModeOnlyClient:
+        def with_structured_output(self, schema, *, method=None):
+            captured["schema"] = schema
+            captured["method"] = method
+            return JsonModeChain()
+
+    llm = LlmService(database)
+    monkeypatch.setattr(llm, "_client", lambda settings, api_key=None: JsonModeOnlyClient())
+    profile = ResumeProfile(
+        title="Python 工程师",
+        summary="后端开发经验",
+        tags=["Python"],
+        skills=["FastAPI"],
+        years_experience=3,
+        education="本科",
+        target_roles=["Python 工程师"],
+        highlights=[],
+    )
+    jobs = [
+        CanonicalJob(
+            id="job-1",
+            title="后端工程师",
+            job_url="https://example.test/job-1",
+            jd_text="Python FastAPI",
+        )
+    ]
+
+    result = llm.score_jobs(
+        {"base_url": "https://api.deepseek.com", "model": "deepseek-v4-flash"},
+        profile,
+        jobs,
+    )
+
+    expected_schema = json.dumps(captured["schema"].model_json_schema(), ensure_ascii=False)
+    assert result[0].job_id == "job-1"
+    assert captured["method"] == "json_mode"
+    assert expected_schema in captured["prompt"]
 
 
 def test_llm_key_is_written_to_local_env_only_after_success(database, tmp_path, monkeypatch):

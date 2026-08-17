@@ -114,24 +114,28 @@ class LlmService:
             raise ValueError("请先测试并保存 LLM 配置")
         return settings
 
-    def parse_resume(self, settings: dict, text: str) -> ResumeProfile:
-        chain = self._client(settings).with_structured_output(ResumeProfile)
-        prompt = _prompt("resume_parse_v1.md").replace("{{resume_text}}", text)
+    def _invoke_structured(self, settings: dict, schema: type[BaseModel], prompt: str) -> BaseModel:
+        chain = self._client(settings).with_structured_output(schema, method="json_mode")
+        schema_json = json.dumps(schema.model_json_schema(), ensure_ascii=False)
+        instructed_prompt = (
+            f"{prompt}\n\n只返回一个符合以下 JSON Schema 的 JSON 对象，不要添加 Markdown 或解释：\n"
+            f"{schema_json}"
+        )
         try:
-            return chain.invoke(prompt)
+            return chain.invoke(instructed_prompt)
         except Exception:
-            return chain.invoke(prompt + "\n请只返回符合结构的 JSON，不要省略字段。")
+            return chain.invoke(instructed_prompt + "\n请严格遵守字段名称和字段类型，不要省略必填字段。")
+
+    def parse_resume(self, settings: dict, text: str) -> ResumeProfile:
+        prompt = _prompt("resume_parse_v1.md").replace("{{resume_text}}", text)
+        return self._invoke_structured(settings, ResumeProfile, prompt)
 
     def score_jobs(self, settings: dict, profile: ResumeProfile, jobs: list[CanonicalJob]) -> list[ScoredJob]:
         if not jobs:
             return []
-        chain = self._client(settings).with_structured_output(_ScoredBatch)
         prompt = _prompt("job_match_v1.md")
         prompt = prompt.replace("{{resume_profile}}", profile.model_dump_json())
         prompt = prompt.replace("{{jobs}}", json.dumps([job.model_dump() for job in jobs], ensure_ascii=False))
-        try:
-            response = chain.invoke(prompt)
-        except Exception:
-            response = chain.invoke(prompt + "\n请严格输出指定 JSON 结构。")
+        response = self._invoke_structured(settings, _ScoredBatch, prompt)
         valid_ids = {job.id for job in jobs}
         return [item for item in response.results if item.job_id in valid_ids]
