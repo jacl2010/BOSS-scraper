@@ -57,10 +57,20 @@ class ResumeProfile(BaseModel):
 class ResumeConditions(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_keyword: str = Field(min_length=1, max_length=50)
-    city: str = Field(min_length=1)
+    # Keep city validation deliberately light.  The pinned collector resolves a
+    # Chinese city name or a nine-digit code using its local table and BOSS's
+    # live city API at collection time.
+    city: str = Field(default="北京", min_length=1)
     experience: str
     degree: str
     salary: str
+
+    @field_validator("city", mode="before")
+    @classmethod
+    def default_city(cls, value: object) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return "北京"
+        return value.strip() if isinstance(value, str) else value
 
 
 class ResumePatch(BaseModel):
@@ -112,6 +122,25 @@ class CanonicalJob(BaseModel):
     active_status_raw: str | None = None
     active_bucket: Literal["active", "recent", "inactive", "unknown"] = "unknown"
     published_at: str | None = None
+
+
+class JobMarketSummary(BaseModel):
+    """Aggregated collector result, following boss-scraper's job_summary.py."""
+
+    keyword: str
+    city: str
+    total_jobs: int = Field(ge=0)
+    total_details: int = Field(ge=0)
+    salary_ranges: list[tuple[str, int]] = Field(default_factory=list)
+    experience: list[tuple[str, int]] = Field(default_factory=list)
+    degrees: list[tuple[str, int]] = Field(default_factory=list)
+    districts: list[tuple[str, int]] = Field(default_factory=list)
+    companies: list[tuple[str, int]] = Field(default_factory=list)
+    skill_tags: list[tuple[str, int]] = Field(default_factory=list)
+    jd_terms: list[tuple[str, int]] = Field(default_factory=list)
+    filters: dict[str, str] = Field(default_factory=dict)
+    pages: int = Field(default=10, ge=1, le=10)
+    formatted_summary: str
 
 
 class ScoredJob(BaseModel):

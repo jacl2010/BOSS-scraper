@@ -7,10 +7,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.database import Database
+from app.boss import CollectedJobs
 from app.main import create_app
 from app.schemas import (
     BossStatus,
     CanonicalJob,
+    JobMarketSummary,
     LlmSettingsInput,
     LlmSettingsView,
     ResumeProfile,
@@ -78,7 +80,7 @@ class FakeBoss:
 
     def collect(self, conditions):
         self.collect_calls += 1
-        return [
+        jobs = [
             CanonicalJob(
                 id="job-fixture",
                 title="Python 工程师",
@@ -95,6 +97,23 @@ class FakeBoss:
                 active_bucket="active",
             )
         ]
+        return CollectedJobs(
+            jobs,
+            JobMarketSummary(
+                keyword=conditions.job_keyword,
+                city=conditions.city,
+                total_jobs=1,
+                total_details=1,
+                salary_ranges=[("20-30K", 1)],
+                experience=[("3-5年", 1)],
+                degrees=[("本科", 1)],
+                districts=[],
+                companies=[("示例公司", 1)],
+                skill_tags=[("Python", 1)],
+                jd_terms=[("FastAPI", 1)],
+                formatted_summary="岗位市场摘要: Python @ 上海",
+            ),
+        )
 
 
 @pytest.mark.parametrize(
@@ -195,5 +214,7 @@ def test_fake_api_core_loop_is_isolated_and_idle_has_zero_external_calls(tmp_pat
     second_results = client.get(f"/api/resumes/{second.json()['id']}/results").json()
     assert [item["job_id"] for item in first_results["new_published"]] == ["job-fixture"]
     assert first_results["new_active"] == []
+    assert first_results["collection_summary"]["total_details"] == 1
+    assert first_results["collection_summary"]["formatted_summary"] == "岗位市场摘要: Python @ 上海"
     assert second_results["new_published"] == second_results["new_active"] == []
     assert "never-serialized" not in repr(database.get_llm_settings())

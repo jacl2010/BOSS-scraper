@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterator
 
-from app.schemas import CanonicalJob, LlmSettingsInput, MatchResult
+from app.schemas import CanonicalJob, JobMarketSummary, LlmSettingsInput, MatchResult
 
 
 def utc_now() -> str:
@@ -76,6 +76,10 @@ class Database:
                     pool TEXT NOT NULL, score INTEGER NOT NULL, reason TEXT NOT NULL,
                     strengths_json TEXT NOT NULL, gaps_json TEXT NOT NULL, rank INTEGER NOT NULL,
                     matched_at TEXT NOT NULL, PRIMARY KEY (resume_id, job_id)
+                );
+                CREATE TABLE IF NOT EXISTS collection_summaries (
+                    resume_id TEXT PRIMARY KEY REFERENCES resumes(id) ON DELETE CASCADE,
+                    summary_json TEXT NOT NULL, collected_at TEXT NOT NULL
                 );
                 """
             )
@@ -203,3 +207,23 @@ class Database:
                 WHERE r.resume_id=? ORDER BY r.pool, r.rank""", (resume_id,)
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def save_collection_summary(self, resume_id: str, summary: JobMarketSummary) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                """INSERT INTO collection_summaries(resume_id, summary_json, collected_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(resume_id) DO UPDATE SET summary_json=excluded.summary_json,
+                collected_at=excluded.collected_at""",
+                (resume_id, summary.model_dump_json(), utc_now()),
+            )
+
+    def get_collection_summary(self, resume_id: str) -> dict | None:
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT summary_json, collected_at FROM collection_summaries WHERE resume_id = ?", (resume_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        summary = JobMarketSummary.model_validate_json(row["summary_json"])
+        return {"collected_at": row["collected_at"], **summary.model_dump(mode="json")}

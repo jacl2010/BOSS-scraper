@@ -91,7 +91,7 @@
           <div class="panel-head compact"><div><p class="kicker">监控条件</p><h3>为这份简历单独设置</h3></div><label class="switch"><input v-model="conditionForm.monitor_enabled" type="checkbox" :disabled="selectedResume.status !== 'ready'" @change="saveConditions"><span></span>参与匹配</label></div>
           <div class="condition-grid">
             <label>岗位关键词<input v-model.trim="conditionForm.job_keyword" placeholder="Python 后端"></label>
-            <label>城市<input v-model.trim="conditionForm.city" placeholder="上海"></label>
+            <label>城市（中文或 9 位代码）<input v-model.trim="conditionForm.city" placeholder="北京"><small class="form-hint">默认北京，支持全国 300+ 城市；本次固定采集第 1~10 页。</small></label>
             <label>工作经验<input v-model.trim="conditionForm.experience" placeholder="不限"></label>
             <label>学历<input v-model.trim="conditionForm.degree" placeholder="不限"></label>
             <label>薪资<input v-model.trim="conditionForm.salary" placeholder="不限"></label>
@@ -119,10 +119,21 @@
 
         <article class="panel results-panel">
           <div class="panel-head"><div><p class="kicker">最近结果</p><h2>按简历查看 Top 10</h2></div><select v-model="resultResumeId" @change="loadResults"><option value="">选择简历</option><option v-for="resume in resumes" :key="resume.id" :value="resume.id">{{ resume.profile?.title || resume.filename }}</option></select></div>
+          <div v-if="resultResumeId" class="result-query" aria-label="本次采集条件">
+            <span>本次采集</span><strong>关键词：{{ collectionSummary?.keyword || resultQuery.keyword }}</strong><strong>城市：{{ collectionSummary?.city || resultQuery.city }}</strong><strong>经验：{{ resultQuery.experience }}</strong><strong>学历：{{ resultQuery.degree }}</strong><strong>薪资：{{ resultQuery.salary }}</strong><strong>页数：1~{{ collectionSummary?.pages || 10 }}</strong><small v-if="collectionSummary?.collected_at || results.matched_at">采集时间：{{ formatTime(collectionSummary?.collected_at || results.matched_at) }}</small>
+          </div>
+          <section v-if="resultResumeId" class="collection-summary" aria-label="采集岗位市场摘要">
+            <div class="collection-summary-head"><div><p class="kicker">岗位市场摘要</p><h3>基于本次详情 JD 汇总</h3></div><small v-if="collectionSummary">详情 {{ collectionSummary.total_details ?? 0 }}/{{ collectionSummary.total_jobs ?? 0 }} 个岗位</small></div>
+            <p v-if="collectionSummaryText" class="collection-summary-text">{{ collectionSummaryText }}</p>
+            <p v-else class="collection-summary-empty">尚无摘要。采集并抓取详情 JD 完成后会在这里生成。</p>
+            <div v-if="collectionSummary" class="summary-facts">
+              <span v-if="formatSummaryItems(collectionSummary.salary_ranges) !== '—'">薪资：{{ formatSummaryItems(collectionSummary.salary_ranges) }}</span><span v-if="formatSummaryItems(collectionSummary.experience) !== '—'">经验：{{ formatSummaryItems(collectionSummary.experience) }}</span><span v-if="formatSummaryItems(collectionSummary.degrees) !== '—'">学历：{{ formatSummaryItems(collectionSummary.degrees) }}</span><span v-if="formatSummaryItems(collectionSummary.districts) !== '—'">区域：{{ formatSummaryItems(collectionSummary.districts) }}</span><span v-if="formatSummaryItems(collectionSummary.companies) !== '—'">公司：{{ formatSummaryItems(collectionSummary.companies) }}</span><span v-if="formatSummaryItems(collectionSummary.skill_tags) !== '—'">技能：{{ formatSummaryItems(collectionSummary.skill_tags) }}</span><span v-if="formatSummaryItems(collectionSummary.jd_terms) !== '—'">JD 高频词：{{ formatSummaryItems(collectionSummary.jd_terms) }}</span>
+            </div>
+          </section>
           <div class="tabs"><button type="button" :class="{ active: resultTab === 'new_published' }" @click="resultTab = 'new_published'">新发布 / 本次新发现 {{ results.new_published.length }}/10</button><button type="button" :class="{ active: resultTab === 'new_active' }" @click="resultTab = 'new_active'">新活跃 {{ results.new_active.length }}/10</button></div>
           <p v-if="!currentResults.length" class="empty">这个结果池暂时为空。完成一次匹配后再回来查看。</p>
           <article v-for="item in currentResults" :key="item.job_id" class="job-card">
-            <div class="score"><strong>{{ item.score }}</strong><small>匹配分</small></div><div class="job-main"><div><span class="rank">#{{ item.rank }}</span><h3>{{ item.title }}</h3><small>{{ item.company_name || '公司未知' }} · {{ [item.city, item.experience, item.degree, item.salary].filter(Boolean).join(' · ') }}</small></div><p>{{ item.reason }}</p><div class="evidence"><span>优势：{{ join(item.strengths) }}</span><span>缺口：{{ join(item.gaps) }}</span></div></div><a :href="item.job_url" target="_blank" rel="noopener noreferrer">在 BOSS 查看 ↗</a>
+            <div class="score"><strong>{{ item.score }}</strong><small>匹配分</small></div><div class="job-main"><div><span class="rank">#{{ item.rank }}</span><h3>{{ item.title }}</h3><small>{{ item.company_name || '公司未知' }} · {{ [item.city, item.experience, item.degree, item.salary].filter(Boolean).join(' · ') }}</small></div><p>{{ item.reason }}</p><div v-if="jobSummary(item) || item.detail_status || item.detail_page_status || item.jd_status || item.jd_text" class="job-detail-meta"><span class="detail-status" :class="detailStatusClass(item)">{{ detailStatus(item) }}</span><span v-if="item.active_status">活跃状态：{{ item.active_status }}</span></div><div v-if="jobSummary(item)" class="jd-summary"><strong>JD 摘要</strong><p>{{ jobSummary(item) }}</p></div><div class="evidence"><span>优势：{{ join(item.strengths) }}</span><span>缺口：{{ join(item.gaps) }}</span></div></div><a :href="item.job_url" target="_blank" rel="noopener noreferrer">在 BOSS 查看 ↗</a>
           </article>
         </article>
       </section>

@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.boss import BossAdapter, active_bucket, normalize_job
+from app.boss import BossAdapter, active_bucket, normalize_job, salary_code
 from app.matching import filter_jobs, select_candidate_pools, sort_scored_results
 from app.schemas import ResumeConditions, ScoredJob
 
@@ -47,6 +47,30 @@ def test_collect_uses_and_reads_pinned_cli_detail_output(monkeypatch):
 
     def fake_run(args, **kwargs):
         observed["args"] = args
+        observed["timeout"] = kwargs["timeout"]
+        list_path = Path(args[args.index("--output") + 1])
+        list_path.write_text(
+            json.dumps(
+                {
+                    "keyword": "Python",
+                    "city": "上海",
+                    "jobs": [
+                        {
+                            "job_id": "cli-job",
+                            "title": "Python 工程师",
+                            "salary": "20-30K",
+                            "location": "上海",
+                            "tags": "3-5年 | 本科",
+                            "boss_name": "示例公司",
+                            "skills": "Python | FastAPI",
+                            "job_link": "https://www.zhipin.com/job_detail/cli-job.html",
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
         detail_path = Path(args[args.index("--detail-output") + 1])
         detail_path.write_text(
             json.dumps(
@@ -78,7 +102,33 @@ def test_collect_uses_and_reads_pinned_cli_detail_output(monkeypatch):
     )
 
     assert "--detail-output" in observed["args"]
+    assert observed["args"][observed["args"].index("--pages") + 1] == "10"
+    assert "--detail" in observed["args"]
+    assert "--max-details" not in observed["args"]
+    assert observed["timeout"] == 6000
+    assert [
+        observed["args"][observed["args"].index(flag) + 1]
+        for flag in ("--salary", "--experience", "--degree")
+    ] == ["406", "105", "203"]
     assert [job.id for job in jobs] == ["cli-job"]
+    assert jobs.summary.total_jobs == jobs.summary.total_details == 1
+    assert jobs.summary.pages == 10
+    assert jobs.summary.filters == {"experience": "3-5年", "degree": "本科", "salary": "20-30K"}
+    assert "岗位市场摘要: Python @ 上海" in jobs.summary.formatted_summary
+
+
+def test_conditions_default_blank_city_to_beijing():
+    conditions = ResumeConditions(
+        job_keyword="Python", city="", experience="不限", degree="不限", salary="不限"
+    )
+
+    assert conditions.city == "北京"
+
+
+def test_freeform_salary_only_uses_a_containing_upstream_bucket():
+    assert salary_code("20-30K") == "406"
+    assert salary_code("20-50K") == "406"
+    assert salary_code("5-20K") is None
 
 
 def test_five_hard_filters_keep_only_matching_job():
@@ -88,6 +138,15 @@ def test_five_hard_filters_keep_only_matching_job():
     )
 
     assert [job.id for job in filter_jobs(jobs, conditions)] == ["new-job"]
+
+
+def test_city_code_is_not_compared_to_chinese_detail_location():
+    job = normalize_job(json.loads(FIXTURE_PATH.read_text())[0])
+    conditions = ResumeConditions(
+        job_keyword="Python", city="101020100", experience="3-5年", degree="本科", salary="20-30K"
+    )
+
+    assert [item.id for item in filter_jobs([job], conditions)] == ["new-job"]
 
 
 def test_first_discovery_and_active_transition_pools_are_exclusive():

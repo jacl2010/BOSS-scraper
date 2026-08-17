@@ -28,12 +28,21 @@ def _same_requirement(expected: str, actual: str | None) -> bool:
 
 
 def _salary(value: str) -> tuple[float | None, float | None]:
+    range_match = re.search(
+        r"(\d+(?:\.\d+)?)\s*[kK]?\s*[-~～至]\s*(\d+(?:\.\d+)?)\s*[kK]", value
+    )
+    if range_match:
+        return float(range_match.group(1)), float(range_match.group(2))
     amounts = [float(item) for item in re.findall(r"(\d+(?:\.\d+)?)\s*[kK]", value)]
     return (amounts[0], amounts[-1]) if amounts else (None, None)
 
 
 def filter_jobs(jobs: list[CanonicalJob], conditions: ResumeConditions) -> list[CanonicalJob]:
     wanted_min, wanted_max = _salary(conditions.salary)
+    # The collector accepts a nine-digit city code and resolves it before
+    # scraping.  Detail records contain a Chinese location, so comparing the
+    # original code to that string would incorrectly discard every result.
+    city_is_code = re.fullmatch(r"\d{9}", conditions.city.strip()) is not None
     result: list[CanonicalJob] = []
     for job in jobs:
         haystack = f"{job.title} {job.jd_text}".lower()
@@ -42,7 +51,7 @@ def filter_jobs(jobs: list[CanonicalJob], conditions: ResumeConditions) -> list[
             and job.salary_max_k >= wanted_min and (wanted_max is None or job.salary_min_k <= wanted_max)
         )
         if (
-            conditions.job_keyword.lower() in haystack and _same_requirement(conditions.city, job.city)
+            conditions.job_keyword.lower() in haystack and (city_is_code or _same_requirement(conditions.city, job.city))
             and _same_requirement(conditions.experience, job.experience) and _same_requirement(conditions.degree, job.degree)
             and salary_matches
         ):
@@ -103,6 +112,9 @@ class MatchRunner:
                 self._update(stage="scraping", current_resume_id=resume["id"], progress_current=number - 1, message="正在采集岗位")
                 conditions = self.resumes._conditions(resume)
                 jobs = self.boss.collect(conditions)
+                summary = getattr(jobs, "summary", None)
+                if summary is not None:
+                    self.database.save_collection_summary(resume["id"], summary)
                 previous, newly_seen = {}, set()
                 for job in jobs:
                     is_new, old_bucket = self.database.upsert_job(job)

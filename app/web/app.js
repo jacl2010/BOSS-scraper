@@ -12,10 +12,10 @@ createApp({
       llm: { base_url: '', model: '', key_configured: false, api_key_masked: '', tested_at: null, thinking_enabled: true, reasoning_effort: 'low' },
       llmForm: { base_url: '', model: '', api_key: '', thinking_enabled: true, reasoning_effort: 'low' },
       resumes: [], selectedResumeId: '', resultResumeId: '',
-      conditionForm: { job_keyword: '', city: '', experience: '不限', degree: '不限', salary: '不限', monitor_enabled: false },
+      conditionForm: { job_keyword: '', city: '北京', experience: '不限', degree: '不限', salary: '不限', monitor_enabled: false },
       boss: { state: 'unknown', message: '' },
       matchStatus: { status: 'idle', stage: 'idle', progress_current: 0, progress_total: 0, message: '' },
-      results: { new_published: [], new_active: [] }, resultTab: 'new_published',
+      results: { new_published: [], new_active: [], collection_summary: null }, resultTab: 'new_published',
       busy: { llm: false, upload: false, resume: false, boss: false },
       notice: { type: 'info', text: '' }, successDialog: { open: false, text: '' }, pollTimer: null,
       stages: [
@@ -34,8 +34,29 @@ createApp({
       }[this.route] || { eyebrow: '', title: '', description: '' };
     },
     selectedResume() { return this.resumes.find((item) => item.id === this.selectedResumeId); },
+    resultResume() { return this.resumes.find((item) => item.id === this.resultResumeId); },
     eligibleResumes() { return this.resumes.filter((item) => item.status === 'ready' && item.monitor_enabled && this.conditionsComplete(item.conditions)); },
     currentResults() { return this.results[this.resultTab] || []; },
+    resultQuery() {
+      const source = this.collectionSummary?.filters || this.results.query || this.results.conditions || this.results.search_conditions || {};
+      const fallback = this.resultResume?.conditions || {};
+      return {
+        keyword: source.keyword || source.job_keyword || this.results.keyword || this.results.job_keyword || fallback.job_keyword || '—',
+        city: source.city || this.results.city || fallback.city || '北京（默认）',
+        experience: source.experience || this.results.experience || fallback.experience || '不限',
+        degree: source.degree || this.results.degree || fallback.degree || '不限',
+        salary: source.salary || this.results.salary || fallback.salary || '不限',
+      };
+    },
+    collectionSummary() {
+      const summary = this.results.collection_summary;
+      return summary && typeof summary === 'object' && !Array.isArray(summary) ? summary : null;
+    },
+    collectionSummaryText() {
+      const summary = this.collectionSummary;
+      if (summary) return summary.formatted_summary || summary.formatted_text || summary.text || summary.summary || '';
+      return typeof this.results.collection_summary === 'string' ? this.results.collection_summary : '';
+    },
     canStartMatch() { return this.matchStatus.status !== 'running' && this.llm.tested_at && this.llm.key_configured && this.eligibleResumes.length > 0; },
     taskLabel() { return ({ idle: '空闲', running: '运行中', completed: '已完成', failed: '失败' })[this.matchStatus.status] || '空闲'; },
     bossLabel() { return ({ unknown: '尚未检查', ready: '已就绪', login_required: '需要登录', platform_limited: '访问受限', chrome_unavailable: 'Chrome 不可用', collector_unavailable: '采集器不可用' })[this.boss.state] || this.boss.state; },
@@ -77,7 +98,7 @@ createApp({
     async loadResumes() { this.resumes = await this.api('/api/resumes'); if (!this.selectedResumeId && this.resumes.length) this.selectResume(this.resumes[0].id); },
     selectResume(id) {
       this.selectedResumeId = id; const resume = this.resumes.find((item) => item.id === id); const c = resume?.conditions || {};
-      this.conditionForm = { job_keyword: c.job_keyword || '', city: c.city || '', experience: c.experience || '不限', degree: c.degree || '不限', salary: c.salary || '不限', monitor_enabled: Boolean(resume?.monitor_enabled) };
+      this.conditionForm = { job_keyword: c.job_keyword || '', city: c.city || '北京', experience: c.experience || '不限', degree: c.degree || '不限', salary: c.salary || '不限', monitor_enabled: Boolean(resume?.monitor_enabled) };
     },
     async uploadFiles(event) {
       const files = [...event.target.files]; event.target.value = ''; this.busy.upload = true;
@@ -107,11 +128,49 @@ createApp({
     async loadMatchStatus() { this.matchStatus = await this.api('/api/matches/status'); },
     beginPolling() { this.stopPolling(); this.pollTimer = setInterval(async () => { try { await this.loadMatchStatus(); if (['completed', 'failed'].includes(this.matchStatus.status)) { this.stopPolling(); await this.loadResumes(); if (this.resultResumeId) await this.loadResults(); } } catch (error) { this.stopPolling(); this.flash('本地服务已断开，请重新双击启动。', 'error'); } }, 1000); },
     stopPolling() { if (this.pollTimer) clearInterval(this.pollTimer); this.pollTimer = null; },
-    async loadResults() { if (!this.resultResumeId) { this.results = { new_published: [], new_active: [] }; return; } try { this.results = await this.api(`/api/resumes/${this.resultResumeId}/results`); } catch (error) { this.flash(error.message, 'error'); } },
+    async loadResults() { if (!this.resultResumeId) { this.results = { new_published: [], new_active: [], collection_summary: null }; return; } try { this.results = await this.api(`/api/resumes/${this.resultResumeId}/results`); } catch (error) { this.flash(error.message, 'error'); } },
     conditionsComplete(c) { return Boolean(c?.job_keyword?.trim() && c?.city?.trim() && c?.experience?.trim() && c?.degree?.trim() && c?.salary?.trim()); },
     stageClass(key) { const order = this.stages.map((item) => item.key); const current = order.indexOf(this.matchStatus.stage); const index = order.indexOf(key); return { active: index === current && this.matchStatus.status === 'running', done: (current > index) || this.matchStatus.status === 'completed' }; },
     resumeStatusLabel(status) { return ({ parsing: '解析中', ready: '已完成', parse_failed: '失败' })[status] || status; },
     formatTime(value) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'; },
     join(values) { return values?.length ? values.join('、') : '—'; },
+    formatSummaryItems(values) {
+      if (!Array.isArray(values) || !values.length) return '—';
+      return values.map((item) => {
+        if (Array.isArray(item)) {
+          const [name, count] = item;
+          return count === undefined || count === null ? name : `${name} (${count})`;
+        }
+        if (item && typeof item === 'object') {
+          const name = item.name ?? item.label ?? item.value;
+          const count = item.count ?? item.value_count;
+          return count === undefined || count === null ? name : `${name} (${count})`;
+        }
+        return item;
+      }).filter(Boolean).join('、') || '—';
+    },
+    jobSummary(item) {
+      const summary = item?.summary ?? item?.job_summary ?? item?.jd_summary;
+      if (typeof summary === 'string') return summary.trim();
+      if (Array.isArray(summary)) return summary.filter(Boolean).join('；');
+      if (summary && typeof summary === 'object') {
+        const text = summary.summary ?? summary.text ?? summary.content ?? summary.description;
+        return typeof text === 'string' ? text.trim() : '';
+      }
+      return '';
+    },
+    detailStatus(item) {
+      const status = item?.detail_status ?? item?.detail_page_status ?? item?.jd_status;
+      if (status === true || ['success', 'completed', 'fetched', 'ready'].includes(String(status).toLowerCase())) return '详情 JD 已抓取';
+      if (status === false || ['failed', 'error'].includes(String(status).toLowerCase())) return '详情抓取失败';
+      if (['pending', 'running', 'fetching'].includes(String(status).toLowerCase())) return '详情抓取中';
+      return this.jobSummary(item) || item?.jd_text ? '详情 JD 已抓取' : '暂无详情状态';
+    },
+    detailStatusClass(item) {
+      const status = String(item?.detail_status ?? item?.detail_page_status ?? item?.jd_status ?? '').toLowerCase();
+      if (status === false || ['failed', 'error'].includes(status)) return 'failed';
+      if (['pending', 'running', 'fetching'].includes(status)) return 'pending';
+      return this.jobSummary(item) || item?.jd_text || status === 'success' || status === 'completed' || status === 'fetched' || status === 'ready' ? 'ready' : 'unknown';
+    },
   },
 }).mount('#app');

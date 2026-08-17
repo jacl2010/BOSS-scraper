@@ -149,6 +149,7 @@ def create_app(database: Database | None = None, llm=None, boss=None) -> FastAPI
         if database.get_resume_row(resume_id) is None:
             raise _error(404, "简历不存在", "resume_not_found")
         rows = database.get_results(resume_id)
+        collection_summary = database.get_collection_summary(resume_id)
         pools = {"new_published": [], "new_active": []}
         for row in rows:
             pools[row["pool"]].append({
@@ -158,7 +159,18 @@ def create_app(database: Database | None = None, llm=None, boss=None) -> FastAPI
                 "active_status": row["active_status_raw"], "reason": row["reason"],
                 "strengths": json.loads(row["strengths_json"]), "gaps": json.loads(row["gaps_json"]),
             })
-        return {"resume_id": resume_id, "matched_at": rows[0]["matched_at"] if rows else None, **pools}
+        return {
+            "resume_id": resume_id,
+            "matched_at": rows[0]["matched_at"] if rows else None,
+            "collection_summary": collection_summary,
+            **pools,
+        }
+
+    @app.get("/api/resumes/{resume_id}/collection-summary")
+    def resume_collection_summary(resume_id: str):
+        if database.get_resume_row(resume_id) is None:
+            raise _error(404, "简历不存在", "resume_not_found")
+        return {"resume_id": resume_id, "collection_summary": database.get_collection_summary(resume_id)}
 
     web_dir = Path(__file__).parent / "web"
     if web_dir.is_dir():
