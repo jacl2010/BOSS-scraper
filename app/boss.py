@@ -17,6 +17,7 @@ from app.schemas import BossStatus, CanonicalJob, JobMarketSummary, ResumeCondit
 EXPERIENCE_CODES = {
     "在校生": "108", "应届生": "102", "经验不限": "101", "1年以内": "103",
     "1-3年": "104", "3-5年": "105", "5-10年": "106", "10年以上": "107",
+    "10年": "107",
 }
 DEGREE_CODES = {
     "初中及以下": "209", "中专/中技": "208", "高中": "206", "大专": "202",
@@ -88,6 +89,18 @@ def salary_code(value: str | None) -> str | None:
         if minimum >= lower and (upper is None or maximum <= upper):
             return code
     return None
+
+
+def experience_code(value: str | None) -> str | None:
+    """Return a collector code only when the requested experience is singular.
+
+    The upstream CLI accepts one experience code.  A comma-separated request
+    such as ``5-10年,10年以上`` is handled as a local OR filter after scraping,
+    rather than arbitrarily discarding one of the two ranges.
+    """
+
+    choices = [item.strip() for item in re.split(r"[,，]", value or "") if item.strip()]
+    return EXPERIENCE_CODES.get(choices[0]) if len(choices) == 1 else None
 
 
 def normalize_job(raw: dict) -> CanonicalJob:
@@ -218,7 +231,7 @@ class BossAdapter:
             ]
             for flag, value in (
                 ("--salary", salary_code(conditions.salary)),
-                ("--experience", EXPERIENCE_CODES.get(conditions.experience)),
+                ("--experience", experience_code(conditions.experience)),
                 ("--degree", DEGREE_CODES.get(conditions.degree)),
             ):
                 if value:

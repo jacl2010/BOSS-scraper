@@ -27,6 +27,17 @@ def _same_requirement(expected: str, actual: str | None) -> bool:
     return _unlimited(expected) or (actual is not None and expected.strip().lower() in actual.strip().lower())
 
 
+def _same_experience_requirement(expected: str, actual: str | None) -> bool:
+    if _unlimited(expected):
+        return True
+    if actual is None:
+        return False
+    choices = [item.strip() for item in re.split(r"[,，]", expected) if item.strip()]
+    aliases = {"10年": "10年以上"}
+    actual_value = aliases.get(actual.strip(), actual.strip())
+    return any(aliases.get(item, item) == actual_value for item in choices)
+
+
 def _salary(value: str) -> tuple[float | None, float | None]:
     range_match = re.search(
         r"(\d+(?:\.\d+)?)\s*[kK]?\s*[-~～至]\s*(\d+(?:\.\d+)?)\s*[kK]", value
@@ -52,7 +63,8 @@ def filter_jobs(jobs: list[CanonicalJob], conditions: ResumeConditions) -> list[
         )
         if (
             conditions.job_keyword.lower() in haystack and (city_is_code or _same_requirement(conditions.city, job.city))
-            and _same_requirement(conditions.experience, job.experience) and _same_requirement(conditions.degree, job.degree)
+            and _same_experience_requirement(conditions.experience, job.experience)
+            and _same_requirement(conditions.degree, job.degree)
             and salary_matches
         ):
             result.append(job)
