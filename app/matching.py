@@ -10,9 +10,6 @@ from app.database import Database
 from app.schemas import CanonicalJob, MatchResult, MatchStatus, ResumeConditions, ResumeProfile, ScoredJob
 
 
-ACTIVE_BUCKETS = {"active", "recent"}
-
-
 @dataclass
 class CandidatePools:
     new_published: list[CanonicalJob]
@@ -72,20 +69,25 @@ def filter_jobs(jobs: list[CanonicalJob], conditions: ResumeConditions) -> list[
 
 
 def select_candidate_pools(
-    jobs: list[CanonicalJob], previous_buckets: dict[str, str | None], newly_seen: set[str]
+    jobs: list[CanonicalJob], previous_buckets: dict[str, str | None], newly_seen: set[str],
+    changed_ids: set[str] | None = None, previous_active_statuses: dict[str, str | None] | None = None,
 ) -> CandidatePools:
-    published = [job for job in jobs if job.id in newly_seen or job.published_at]
+    changed_ids = changed_ids or set()
+    previous_active_statuses = previous_active_statuses or {}
+    # A later collector run may return the same job ID with a revised JD or
+    # requirement. Those jobs need a new LLM assessment just like new jobs.
+    published = [job for job in jobs if job.id in newly_seen or job.id in changed_ids]
     published_ids = {job.id for job in published}
     activated = [
         job for job in jobs
-        if job.id not in published_ids and job.active_bucket in ACTIVE_BUCKETS
-        and (job.id not in previous_buckets or previous_buckets[job.id] in {"inactive", "unknown", None})
+        if job.id not in published_ids and job.active_status_raw == "刚刚活跃"
+        and previous_active_statuses.get(job.id) != "刚刚活跃"
     ]
-    return CandidatePools(new_published=published[:20], new_active=activated[:20])
+    return CandidatePools(new_published=published, new_active=activated)
 
 
 def sort_scored_results(scored: list[ScoredJob]) -> list[ScoredJob]:
-    return sorted(scored, key=lambda item: (-item.score, item.job_id))[:10]
+    return sorted(scored, key=lambda item: (-item.score, item.job_id))
 
 
 class MatchRunner:
@@ -98,13 +100,14 @@ class MatchRunner:
         with self._lock:
             return self._status.model_copy(deep=True)
 
-    def start(self) -> MatchStatus:
+    def start(self, resume_id: str) -> MatchStatus:
         with self._lock:
             if self._status.status == "running":
                 raise RuntimeError("已有匹配任务正在运行")
             eligible = self.resumes.eligible()
+            eligible = [resume for resume in eligible if resume["id"] == resume_id]
             if not eligible:
-                raise ValueError("没有解析成功、开启监控且条件完整的简历")
+                raise ValueError("所选简历未解析成功、未开启监控或条件不完整")
             self._status = MatchStatus(status="running", stage="checking", progress_total=len(eligible), message="正在检查 BOSS 状态")
         thread = threading.Thread(target=self._run, args=(eligible,), daemon=True)
         thread.start()
@@ -127,24 +130,28 @@ class MatchRunner:
                 summary = getattr(jobs, "summary", None)
                 if summary is not None:
                     self.database.save_collection_summary(resume["id"], summary)
-                previous, newly_seen = {}, set()
+                previous_buckets, previous_active_statuses, newly_seen, changed_ids = {}, {}, set(), set()
+                previous_states = self.database.get_resume_job_states(resume["id"], [job.id for job in jobs])
                 for job in jobs:
-                    is_new, old_bucket = self.database.upsert_job(job)
-                    previous[job.id] = old_bucket
-                    if is_new:
+                    self.database.upsert_job(job)
+                    previous = previous_states.get(job.id)
+                    if previous is None:
                         newly_seen.add(job.id)
+                        continue
+                    previous_active_statuses[job.id] = previous["active_status_raw"]
+                    if previous["matching_content_hash"] != self.database._matching_content_hash(job):
+                        changed_ids.add(job.id)
                 self._update(stage="filtering", message="正在筛选岗位")
-                pools = select_candidate_pools(filter_jobs(jobs, conditions), previous, newly_seen)
+                pools = select_candidate_pools(
+                    filter_jobs(jobs, conditions), previous_buckets, newly_seen, changed_ids, previous_active_statuses
+                )
                 profile = ResumeProfile.model_validate_json(resume["profile_json"])
                 self._update(stage="scoring", message="正在进行 AI 评分")
                 results: list[MatchResult] = []
                 for pool_name, candidates in (("new_published", pools.new_published), ("new_active", pools.new_active)):
                     scored: list[ScoredJob] = []
                     for offset in range(0, len(candidates), 10):
-                        try:
-                            scored.extend(self.llm.score_jobs(settings, profile, candidates[offset:offset + 10]))
-                        except Exception:
-                            continue
+                        scored.extend(self.llm.score_jobs(settings, profile, candidates[offset:offset + 10]))
                     jobs_by_id = {job.id: job for job in candidates}
                     for rank, item in enumerate(sort_scored_results(scored), start=1):
                         if item.job_id in jobs_by_id:
@@ -157,7 +164,7 @@ class MatchRunner:
                                 reason=item.reason, strengths=item.strengths, gaps=item.gaps,
                             ))
                 self._update(stage="finalizing", message="正在保存最近结果")
-                self.database.replace_match_results(resume["id"], results)
+                self.database.save_completed_match(resume["id"], results, jobs)
                 self._update(progress_current=number)
             self._update(status="completed", stage="completed", message="匹配完成")
         except Exception as exc:

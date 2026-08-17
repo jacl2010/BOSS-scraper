@@ -70,6 +70,8 @@ class FakeBoss:
     def __init__(self) -> None:
         self.status_calls = 0
         self.collect_calls = 0
+        self.jd_text = "Python FastAPI 后端开发"
+        self.jobs = None
 
     def status(self):
         self.status_calls += 1
@@ -80,13 +82,13 @@ class FakeBoss:
 
     def collect(self, conditions):
         self.collect_calls += 1
-        jobs = [
+        jobs = self.jobs or [
             CanonicalJob(
                 id="job-fixture",
                 title="Python 工程师",
                 company_name="示例公司",
                 job_url="https://www.zhipin.com/job_detail/job-fixture.html",
-                jd_text="Python FastAPI 后端开发",
+                jd_text=self.jd_text,
                 city="上海",
                 experience="3-5年",
                 degree="本科",
@@ -199,7 +201,7 @@ def test_fake_api_core_loop_is_isolated_and_idle_has_zero_external_calls(tmp_pat
         json={"conditions": conditions, "monitor_enabled": False},
     ).status_code == 200
 
-    started = client.post("/api/matches")
+    started = client.post("/api/matches", json={"resume_id": first.json()["id"]})
     assert started.status_code == 202
     for _ in range(100):
         status = client.get("/api/matches/status").json()
@@ -216,5 +218,161 @@ def test_fake_api_core_loop_is_isolated_and_idle_has_zero_external_calls(tmp_pat
     assert first_results["new_active"] == []
     assert first_results["collection_summary"]["total_details"] == 1
     assert first_results["collection_summary"]["formatted_summary"] == "岗位市场摘要: Python @ 上海"
+    assert first_results["last_completed_at"]
     assert second_results["new_published"] == second_results["new_active"] == []
     assert "never-serialized" not in repr(database.get_llm_settings())
+
+
+def _wait_for_match(client: TestClient) -> dict:
+    for _ in range(100):
+        status = client.get("/api/matches/status").json()
+        if status["status"] != "running":
+            return status
+        time.sleep(0.01)
+    return status
+
+
+def test_selected_resume_is_the_only_resume_processed(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOSS_MATCHER_LLM_API_KEY", "test-key")
+    database = Database(tmp_path / "app.db", tmp_path / "resumes")
+    llm, boss = FakeLlm(database), FakeBoss()
+    client = TestClient(create_app(database=database, llm=llm, boss=boss))
+    client.put("/api/llm-settings", json={"base_url": "https://example.test/v1", "model": "test-model"})
+    conditions = {"job_keyword": "Python", "city": "上海", "experience": "3-5年", "degree": "本科", "salary": "20-30K"}
+    first = client.post("/api/resumes", files={"file": ("first.pdf", pdf_bytes("Python first"), "application/pdf")}).json()
+    second = client.post("/api/resumes", files={"file": ("second.pdf", pdf_bytes("Python second"), "application/pdf")}).json()
+    for resume in (first, second):
+        assert client.patch(f"/api/resumes/{resume['id']}", json={"conditions": conditions, "monitor_enabled": True}).status_code == 200
+
+    assert client.post("/api/matches", json={"resume_id": second["id"]}).status_code == 202
+    status = _wait_for_match(client)
+
+    assert status["status"] == "completed"
+    assert status["current_resume_id"] == second["id"]
+    assert boss.collect_calls == llm.score_calls == 1
+    assert client.get(f"/api/resumes/{first['id']}/results").json()["new_published"] == []
+
+
+def test_matches_require_a_nonempty_selected_resume_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOSS_MATCHER_LLM_API_KEY", "test-key")
+    database = Database(tmp_path / "app.db", tmp_path / "resumes")
+    client = TestClient(create_app(database=database, llm=FakeLlm(database), boss=FakeBoss()))
+    client.put("/api/llm-settings", json={"base_url": "https://example.test/v1", "model": "test-model"})
+    resume = client.post("/api/resumes", files={"file": ("resume.pdf", pdf_bytes("Python resume"), "application/pdf")}).json()
+    conditions = {"job_keyword": "Python", "city": "上海", "experience": "3-5年", "degree": "本科", "salary": "20-30K"}
+    client.patch(f"/api/resumes/{resume['id']}", json={"conditions": conditions, "monitor_enabled": True})
+
+    for payload in (None, {}, {"resume_id": ""}, {"resume_id": "   "}):
+        response = client.post("/api/matches") if payload is None else client.post("/api/matches", json=payload)
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "validation_error"
+
+
+def test_same_job_is_scored_for_each_selected_resume_independently(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOSS_MATCHER_LLM_API_KEY", "test-key")
+    database = Database(tmp_path / "app.db", tmp_path / "resumes")
+    llm, boss = FakeLlm(database), FakeBoss()
+    client = TestClient(create_app(database=database, llm=llm, boss=boss))
+    client.put("/api/llm-settings", json={"base_url": "https://example.test/v1", "model": "test-model"})
+    conditions = {"job_keyword": "Python", "city": "上海", "experience": "3-5年", "degree": "本科", "salary": "20-30K"}
+    first = client.post("/api/resumes", files={"file": ("first.pdf", pdf_bytes("Python first"), "application/pdf")}).json()
+    second = client.post("/api/resumes", files={"file": ("second.pdf", pdf_bytes("Python second"), "application/pdf")}).json()
+    for resume in (first, second):
+        client.patch(f"/api/resumes/{resume['id']}", json={"conditions": conditions, "monitor_enabled": True})
+        assert client.post("/api/matches", json={"resume_id": resume["id"]}).status_code == 202
+        assert _wait_for_match(client)["status"] == "completed"
+
+    assert llm.score_calls == 2
+    assert client.get(f"/api/resumes/{first['id']}/results").json()["new_published"][0]["job_id"] == "job-fixture"
+    assert client.get(f"/api/resumes/{second['id']}/results").json()["new_published"][0]["job_id"] == "job-fixture"
+
+
+def test_changed_collected_job_is_scored_again_and_result_exposes_raw_active_status(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOSS_MATCHER_LLM_API_KEY", "test-key")
+    database = Database(tmp_path / "app.db", tmp_path / "resumes")
+    llm, boss = FakeLlm(database), FakeBoss()
+    client = TestClient(create_app(database=database, llm=llm, boss=boss))
+    client.put("/api/llm-settings", json={"base_url": "https://example.test/v1", "model": "test-model"})
+    resume = client.post("/api/resumes", files={"file": ("resume.pdf", pdf_bytes("Python resume"), "application/pdf")}).json()
+    conditions = {"job_keyword": "Python", "city": "上海", "experience": "3-5年", "degree": "本科", "salary": "20-30K"}
+    client.patch(f"/api/resumes/{resume['id']}", json={"conditions": conditions, "monitor_enabled": True})
+
+    for expected_calls in (1, 1):
+        assert client.post("/api/matches", json={"resume_id": resume["id"]}).status_code == 202
+        assert _wait_for_match(client)["status"] == "completed"
+        assert llm.score_calls == expected_calls
+    boss.jd_text = "Python FastAPI 后端开发，负责分布式任务调度"
+    assert client.post("/api/matches", json={"resume_id": resume["id"]}).status_code == 202
+    assert _wait_for_match(client)["status"] == "completed"
+
+    response = client.get(f"/api/resumes/{resume['id']}/results").json()
+    results = response["new_published"]
+    assert llm.score_calls == 2
+    assert results[0]["active_status_raw"] == results[0]["boss_active_status"] == "刚刚活跃"
+    assert response["last_completed_at"]
+
+
+def test_second_llm_batch_failure_marks_run_failed_and_keeps_previous_results(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOSS_MATCHER_LLM_API_KEY", "test-key")
+    database = Database(tmp_path / "app.db", tmp_path / "resumes")
+
+    class BatchFailingLlm(FakeLlm):
+        def __init__(self, database):
+            super().__init__(database)
+            self.fail_on_call = None
+
+        def score_jobs(self, settings, profile, jobs):
+            self.score_calls += 1
+            if self.score_calls == self.fail_on_call:
+                raise RuntimeError("second scoring batch failed")
+            return [ScoredJob(job_id=job.id, score=92, reason="匹配", strengths=["Python"], gaps=[]) for job in jobs]
+
+    llm, boss = BatchFailingLlm(database), FakeBoss()
+    client = TestClient(create_app(database=database, llm=llm, boss=boss))
+    client.put("/api/llm-settings", json={"base_url": "https://example.test/v1", "model": "test-model"})
+    resume = client.post("/api/resumes", files={"file": ("resume.pdf", pdf_bytes("Python resume"), "application/pdf")}).json()
+    conditions = {"job_keyword": "Python", "city": "上海", "experience": "3-5年", "degree": "本科", "salary": "20-30K"}
+    client.patch(f"/api/resumes/{resume['id']}", json={"conditions": conditions, "monitor_enabled": True})
+    assert client.post("/api/matches", json={"resume_id": resume["id"]}).status_code == 202
+    assert _wait_for_match(client)["status"] == "completed"
+    previous = client.get(f"/api/resumes/{resume['id']}/results").json()
+
+    boss.jobs = [
+        CanonicalJob(
+            id=f"job-{number}", title="Python 工程师", company_name="示例公司",
+            job_url=f"https://www.zhipin.com/job_detail/job-{number}.html", jd_text=f"Python FastAPI {number}",
+            city="上海", experience="3-5年", degree="本科", salary_text="20-30K", salary_min_k=20, salary_max_k=30,
+            active_status_raw="刚刚活跃", active_bucket="active",
+        ) for number in range(11)
+    ]
+    llm.fail_on_call = llm.score_calls + 2
+    assert client.post("/api/matches", json={"resume_id": resume["id"]}).status_code == 202
+    status = _wait_for_match(client)
+    current = client.get(f"/api/resumes/{resume['id']}/results").json()
+
+    assert status["status"] == "failed"
+    assert current["new_published"] == previous["new_published"]
+    assert current["last_completed_at"] == previous["last_completed_at"]
+
+
+def test_result_keeps_active_status_snapshot_after_global_job_changes(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOSS_MATCHER_LLM_API_KEY", "test-key")
+    database = Database(tmp_path / "app.db", tmp_path / "resumes")
+    llm, boss = FakeLlm(database), FakeBoss()
+    client = TestClient(create_app(database=database, llm=llm, boss=boss))
+    client.put("/api/llm-settings", json={"base_url": "https://example.test/v1", "model": "test-model"})
+    resume = client.post("/api/resumes", files={"file": ("resume.pdf", pdf_bytes("Python resume"), "application/pdf")}).json()
+    conditions = {"job_keyword": "Python", "city": "上海", "experience": "3-5年", "degree": "本科", "salary": "20-30K"}
+    client.patch(f"/api/resumes/{resume['id']}", json={"conditions": conditions, "monitor_enabled": True})
+    assert client.post("/api/matches", json={"resume_id": resume["id"]}).status_code == 202
+    assert _wait_for_match(client)["status"] == "completed"
+
+    database.upsert_job(CanonicalJob(
+        id="job-fixture", title="Python 工程师", company_name="示例公司",
+        job_url="https://www.zhipin.com/job_detail/job-fixture.html", jd_text="Python FastAPI 后端开发",
+        city="上海", experience="3-5年", degree="本科", salary_text="20-30K", salary_min_k=20, salary_max_k=30,
+        active_status_raw="今日活跃", active_bucket="recent",
+    ))
+    result = client.get(f"/api/resumes/{resume['id']}/results").json()["new_published"][0]
+
+    assert result["active_status_raw"] == "刚刚活跃"

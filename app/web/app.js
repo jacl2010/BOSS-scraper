@@ -13,9 +13,13 @@ createApp({
       llmForm: { base_url: '', model: '', api_key: '', thinking_enabled: true, reasoning_effort: 'low' },
       resumes: [], selectedResumeId: '', resultResumeId: '',
       conditionForm: { job_keyword: '', city: '北京', experience: '不限', degree: '不限', salary: '不限', monitor_enabled: false },
+      cityOptions: window.CITY_OPTIONS || [],
+      experienceOptions: ['1-3年', '3-5年', '5-10年', '10年以上'],
+      degreeOptions: ['大专', '本科', '硕士', '博士'],
+      salaryOptions: ['10-20K', '20-50K', '50K以上'],
       boss: { state: 'unknown', message: '' },
       matchStatus: { status: 'idle', stage: 'idle', progress_current: 0, progress_total: 0, message: '' },
-      results: { new_published: [], new_active: [], collection_summary: null }, resultTab: 'new_published',
+      results: { new_published: [], new_active: [], collection_summary: null }, resultTab: 'new_published', runningResumeId: '',
       busy: { llm: false, upload: false, resume: false, boss: false },
       notice: { type: 'info', text: '' }, successDialog: { open: false, text: '' }, pollTimer: null,
       stages: [
@@ -29,7 +33,7 @@ createApp({
     pageMeta() {
       return {
         '/resumes': { eyebrow: 'RESUME WORKBENCH', title: '把简历变成可匹配的信号', description: '上传文本型 PDF，检查 AI 摘要，并为每份简历保存独立条件。' },
-        '/matches': { eyebrow: 'MANUAL MATCH RUN', title: '只在你点击时开始匹配', description: '先做五项硬过滤，再由 LLM 评分，保留两个互斥 Top 10。' },
+        '/matches': { eyebrow: 'MANUAL MATCH RUN', title: '先选择简历，再读完整结果', description: '按这份简历的条件采集岗位，只对新发现或内容变化的职位进行评分。' },
         '/llm': { eyebrow: 'MODEL CONNECTION', title: '连接你信任的大模型', description: '在页面测试配置，Key 成功后只保存在本机 .env。' },
       }[this.route] || { eyebrow: '', title: '', description: '' };
     },
@@ -57,7 +61,15 @@ createApp({
       if (summary) return summary.formatted_summary || summary.formatted_text || summary.text || summary.summary || '';
       return typeof this.results.collection_summary === 'string' ? this.results.collection_summary : '';
     },
-    canStartMatch() { return this.matchStatus.status !== 'running' && this.llm.tested_at && this.llm.key_configured && this.eligibleResumes.length > 0; },
+    selectedMatchIsEligible() { return this.eligibleResumes.some((resume) => resume.id === this.resultResumeId); },
+    hasMatchedSelectedResume() {
+      return Boolean(this.resultResumeId === this.results.resume_id && this.results.last_completed_at);
+    },
+    matchButtonLabel() { return this.hasMatchedSelectedResume ? '继续匹配' : '开始匹配'; },
+    canStartMatch() {
+      return this.matchStatus.status !== 'running' && this.llm.tested_at && this.llm.key_configured
+        && this.selectedMatchIsEligible;
+    },
     taskLabel() { return ({ idle: '空闲', running: '运行中', completed: '已完成', failed: '失败' })[this.matchStatus.status] || '空闲'; },
     bossLabel() { return ({ unknown: '尚未检查', ready: '已就绪', login_required: '需要登录', platform_limited: '访问受限', chrome_unavailable: 'Chrome 不可用', collector_unavailable: '采集器不可用' })[this.boss.state] || this.boss.state; },
   },
@@ -95,7 +107,13 @@ createApp({
       }
       catch (error) { this.flash(error.message, 'error'); } finally { this.busy.llm = false; }
     },
-    async loadResumes() { this.resumes = await this.api('/api/resumes'); if (!this.selectedResumeId && this.resumes.length) this.selectResume(this.resumes[0].id); },
+    async loadResumes() {
+      this.resumes = await this.api('/api/resumes');
+      if (!this.selectedResumeId && this.resumes.length) this.selectResume(this.resumes[0].id);
+      if (this.resultResumeId && !this.eligibleResumes.some((resume) => resume.id === this.resultResumeId)) {
+        this.resultResumeId = ''; this.results = { new_published: [], new_active: [], collection_summary: null };
+      }
+    },
     selectResume(id) {
       this.selectedResumeId = id; const resume = this.resumes.find((item) => item.id === id); const c = resume?.conditions || {};
       this.conditionForm = { job_keyword: c.job_keyword || '', city: c.city || '北京', experience: c.experience || '不限', degree: c.degree || '不限', salary: c.salary || '不限', monitor_enabled: Boolean(resume?.monitor_enabled) };
@@ -124,11 +142,26 @@ createApp({
     replaceResume(updated) { const index = this.resumes.findIndex((item) => item.id === updated.id); if (index >= 0) this.resumes.splice(index, 1, updated); this.selectResume(updated.id); },
     async checkBoss() { this.busy.boss = true; try { this.boss = await this.api('/api/boss/status'); } catch (error) { this.flash(error.message, 'error'); } finally { this.busy.boss = false; } },
     async setupBoss() { this.busy.boss = true; try { this.boss = await this.api('/api/boss/setup', { method: 'POST' }); this.flash('已打开 BOSS 专用 Chrome，请手动登录后重新检查。'); } catch (error) { this.flash(error.message, 'error'); } finally { this.busy.boss = false; } },
-    async startMatch() { try { this.matchStatus = await this.api('/api/matches', { method: 'POST' }); this.beginPolling(); } catch (error) { this.flash(error.message, 'error'); } },
+    async startMatch() {
+      if (!this.canStartMatch) return;
+      try {
+        this.matchStatus = await this.api('/api/matches', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resume_id: this.resultResumeId }),
+        });
+        this.runningResumeId = this.resultResumeId;
+        this.beginPolling();
+      } catch (error) { this.flash(error.message, 'error'); }
+    },
     async loadMatchStatus() { this.matchStatus = await this.api('/api/matches/status'); },
-    beginPolling() { this.stopPolling(); this.pollTimer = setInterval(async () => { try { await this.loadMatchStatus(); if (['completed', 'failed'].includes(this.matchStatus.status)) { this.stopPolling(); await this.loadResumes(); if (this.resultResumeId) await this.loadResults(); } } catch (error) { this.stopPolling(); this.flash('本地服务已断开，请重新双击启动。', 'error'); } }, 1000); },
+    beginPolling() { this.stopPolling(); this.pollTimer = setInterval(async () => { try { await this.loadMatchStatus(); if (['completed', 'failed'].includes(this.matchStatus.status)) { this.stopPolling(); const finishedResumeId = this.runningResumeId || this.matchStatus.current_resume_id; if (finishedResumeId) { this.resultResumeId = finishedResumeId; this.results = { new_published: [], new_active: [], collection_summary: null }; } this.runningResumeId = ''; await this.loadResumes(); if (this.resultResumeId) await this.loadResults(); } } catch (error) { this.stopPolling(); this.flash('本地服务已断开，请重新双击启动。', 'error'); } }, 1000); },
     stopPolling() { if (this.pollTimer) clearInterval(this.pollTimer); this.pollTimer = null; },
-    async loadResults() { if (!this.resultResumeId) { this.results = { new_published: [], new_active: [], collection_summary: null }; return; } try { this.results = await this.api(`/api/resumes/${this.resultResumeId}/results`); } catch (error) { this.flash(error.message, 'error'); } },
+    selectMatchResume() { this.results = { new_published: [], new_active: [], collection_summary: null }; this.loadResults(); },
+    async loadResults() {
+      if (!this.resultResumeId) { this.results = { new_published: [], new_active: [], collection_summary: null }; return; }
+      try {
+        this.results = await this.api(`/api/resumes/${this.resultResumeId}/results`);
+      } catch (error) { this.flash(error.message, 'error'); }
+    },
     conditionsComplete(c) { return Boolean(c?.job_keyword?.trim() && c?.city?.trim() && c?.experience?.trim() && c?.degree?.trim() && c?.salary?.trim()); },
     stageClass(key) { const order = this.stages.map((item) => item.key); const current = order.indexOf(this.matchStatus.stage); const index = order.indexOf(key); return { active: index === current && this.matchStatus.status === 'running', done: (current > index) || this.matchStatus.status === 'completed' }; },
     resumeStatusLabel(status) { return ({ parsing: '解析中', ready: '已完成', parse_failed: '失败' })[status] || status; },
@@ -159,6 +192,7 @@ createApp({
       }
       return '';
     },
+    jobActiveStatus(item) { return item?.boss_active_status || item?.active_status_raw || item?.active_status || ''; },
     detailStatus(item) {
       const status = item?.detail_status ?? item?.detail_page_status ?? item?.jd_status;
       if (status === true || ['success', 'completed', 'fetched', 'ready'].includes(String(status).toLowerCase())) return '详情 JD 已抓取';

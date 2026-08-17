@@ -26,7 +26,7 @@
     </aside>
 
     <main>
-      <header class="topbar">
+      <header class="topbar" :class="{ 'match-topbar': route === '/matches' }">
         <div>
           <p class="eyebrow">{{ pageMeta.eyebrow }}</p>
           <h1>{{ pageMeta.title }}</h1>
@@ -72,7 +72,7 @@
 
       <section v-if="route === '/resumes'" class="resume-layout">
         <article class="panel resume-list-panel">
-          <div class="panel-head"><div><p class="kicker">文件柜</p><h2>简历 {{ resumes.length }}/10</h2></div><label class="upload-button" :class="{ disabled: resumes.length >= 10 || busy.upload }">选择 PDF<input type="file" accept="application/pdf,.pdf" multiple :disabled="resumes.length >= 10 || busy.upload" @change="uploadFiles"></label></div>
+          <div class="panel-head"><div><p class="kicker">文件柜</p><h2>简历 {{ resumes.length }} 份</h2></div><label class="upload-button" :class="{ disabled: resumes.length >= 10 || busy.upload }">选择 PDF<input type="file" accept="application/pdf,.pdf" multiple :disabled="resumes.length >= 10 || busy.upload" @change="uploadFiles"></label></div>
           <p v-if="!resumes.length" class="empty">还没有简历。先配置大模型，再上传可提取文本的 PDF。</p>
           <button v-for="resume in resumes" :key="resume.id" type="button" class="resume-row" :class="{ selected: selectedResumeId === resume.id }" @click="selectResume(resume.id)">
             <span class="file-icon">PDF</span><span><strong>{{ resume.profile?.title || resume.filename }}</strong><small>{{ resume.filename }}</small></span><em :class="resume.status">{{ resumeStatusLabel(resume.status) }}</em>
@@ -91,10 +91,10 @@
           <div class="panel-head compact"><div><p class="kicker">监控条件</p><h3>为这份简历单独设置</h3></div><label class="switch"><input v-model="conditionForm.monitor_enabled" type="checkbox" :disabled="selectedResume.status !== 'ready'" @change="saveConditions"><span></span>参与匹配</label></div>
           <div class="condition-grid">
             <label>岗位关键词<input v-model.trim="conditionForm.job_keyword" placeholder="Python 后端"></label>
-            <label>城市（中文或 9 位代码）<input v-model.trim="conditionForm.city" placeholder="北京"><small class="form-hint">默认北京，支持全国 300+ 城市；本次固定采集第 1~2 页。</small></label>
-            <label>工作经验<input v-model.trim="conditionForm.experience" placeholder="不限"></label>
-            <label>学历<input v-model.trim="conditionForm.degree" placeholder="不限"></label>
-            <label>薪资<input v-model.trim="conditionForm.salary" placeholder="不限"></label>
+            <label>城市<select v-model="conditionForm.city"><option v-if="!cityOptions.some((city) => city.name === conditionForm.city)" :value="conditionForm.city">当前值：{{ conditionForm.city }}（请重新选择）</option><option v-for="city in cityOptions" :key="city.code" :value="city.name">{{ city.name }}</option></select><small class="form-hint">覆盖采集器支持的全部城市；默认北京，本次固定采集第 1~2 页。</small></label>
+            <label>工作经验<select v-model="conditionForm.experience"><option v-if="!experienceOptions.includes(conditionForm.experience)" :value="conditionForm.experience">当前值：{{ conditionForm.experience }}（请重新选择）</option><option v-for="option in experienceOptions" :key="option" :value="option">{{ option }}</option></select></label>
+            <label>学历<select v-model="conditionForm.degree"><option v-if="!degreeOptions.includes(conditionForm.degree)" :value="conditionForm.degree">当前值：{{ conditionForm.degree }}（请重新选择）</option><option v-for="option in degreeOptions" :key="option" :value="option">{{ option }}</option></select></label>
+            <label>薪资<select v-model="conditionForm.salary"><option v-if="!salaryOptions.includes(conditionForm.salary)" :value="conditionForm.salary">当前值：{{ conditionForm.salary }}（请重新选择）</option><option v-for="option in salaryOptions" :key="option" :value="option">{{ option }}</option></select></label>
           </div>
           <button class="secondary" type="button" :disabled="busy.resume" @click="saveConditions">保存条件</button>
         </article>
@@ -102,38 +102,48 @@
       </section>
 
       <section v-if="route === '/matches'" class="match-stack">
-        <article class="readiness-grid">
-          <div class="signal-card"><span>LLM</span><strong>{{ llm.tested_at && llm.key_configured ? '已就绪' : '待配置' }}</strong><small>{{ llm.model || '未设置模型' }}</small></div>
-          <div class="signal-card"><span>简历</span><strong>{{ eligibleResumes.length }} 份可参与</strong><small>解析成功、监控开启、条件完整</small></div>
-          <div class="signal-card"><span>BOSS</span><strong>{{ bossLabel }}</strong><small>{{ boss.message || '尚未检查环境' }}</small></div>
-          <div class="signal-actions"><button class="secondary" type="button" :disabled="busy.boss" @click="checkBoss">检查 BOSS 状态</button><button class="secondary" type="button" :disabled="busy.boss" @click="setupBoss">打开专用 Chrome</button><button class="primary" type="button" :disabled="!canStartMatch" @click="startMatch">开始匹配</button></div>
+        <article class="match-command-bar" aria-label="匹配控制台">
+          <div class="match-readiness" aria-label="准备状态">
+            <span><b :class="{ ready: llm.tested_at && llm.key_configured }"></b>LLM {{ llm.tested_at && llm.key_configured ? '已就绪' : '待配置' }}</span>
+            <span><b :class="{ ready: eligibleResumes.length }"></b>{{ eligibleResumes.length }} 份可参与</span>
+            <span><b :class="{ ready: boss.state === 'ready' }"></b>BOSS {{ bossLabel }}</span>
+          </div>
+          <div class="match-command">
+            <label for="match-resume">匹配简历</label>
+            <select id="match-resume" v-model="resultResumeId" :disabled="matchStatus.status === 'running'" @change="selectMatchResume">
+              <option value="">选择一份可参与的简历</option>
+              <option v-for="resume in eligibleResumes" :key="resume.id" :value="resume.id">{{ resume.profile?.title || resume.filename }}</option>
+            </select>
+            <button class="primary match-trigger" type="button" :disabled="!canStartMatch" @click="startMatch">{{ matchButtonLabel }}</button>
+          </div>
+          <div class="signal-actions" aria-label="BOSS 环境操作"><button class="secondary" type="button" :disabled="busy.boss" @click="checkBoss">检查状态</button><button class="secondary" type="button" :disabled="busy.boss" @click="setupBoss">打开 Chrome</button></div>
         </article>
 
         <article class="panel pipeline-panel">
-          <div class="panel-head"><div><p class="kicker">当前任务</p><h2>一次人工触发，一条清晰轨道</h2></div><span class="mono">{{ matchStatus.progress_current }}/{{ matchStatus.progress_total }}</span></div>
+          <div class="pipeline-intro"><p class="kicker">匹配信号轨</p><span class="mono">{{ matchStatus.progress_current }}/{{ matchStatus.progress_total }}</span><p>{{ matchStatus.message || '选择简历后，按配置采集并匹配岗位。' }}</p></div>
           <ol class="pipeline">
             <li v-for="stage in stages" :key="stage.key" :class="stageClass(stage.key)"><span>{{ stage.code }}</span><strong>{{ stage.label }}</strong></li>
           </ol>
-          <p class="task-message">{{ matchStatus.message || '页面空闲时不会访问 BOSS，也不会调用岗位评分。' }}</p>
         </article>
 
         <article class="panel results-panel">
-          <div class="panel-head"><div><p class="kicker">最近结果</p><h2>按简历查看 Top 10</h2></div><select v-model="resultResumeId" @change="loadResults"><option value="">选择简历</option><option v-for="resume in resumes" :key="resume.id" :value="resume.id">{{ resume.profile?.title || resume.filename }}</option></select></div>
+          <div class="panel-head results-head"><div><p class="kicker">本轮岗位结果</p><h2>{{ resultResume ? (resultResume.profile?.title || resultResume.filename) : '等待选择简历' }}</h2></div><span v-if="resultResumeId" class="result-count">{{ currentResults.length }} 个{{ resultTab === 'new_active' ? '刚刚活跃岗位' : '新发现或内容变化岗位' }}</span></div>
           <div v-if="resultResumeId" class="result-query" aria-label="本次采集条件">
             <span>本次采集</span><strong>关键词：{{ collectionSummary?.keyword || resultQuery.keyword }}</strong><strong>城市：{{ collectionSummary?.city || resultQuery.city }}</strong><strong>经验：{{ resultQuery.experience }}</strong><strong>学历：{{ resultQuery.degree }}</strong><strong>薪资：{{ resultQuery.salary }}</strong><strong>页数：1~{{ collectionSummary?.pages || 2 }}</strong><small v-if="collectionSummary?.collected_at || results.matched_at">采集时间：{{ formatTime(collectionSummary?.collected_at || results.matched_at) }}</small>
           </div>
-          <section v-if="resultResumeId" class="collection-summary" aria-label="采集岗位市场摘要">
+          <details v-if="resultResumeId" class="collection-summary" aria-label="采集岗位市场摘要">
+            <summary><span>采集详情与市场摘要</span><small v-if="collectionSummary">详情 {{ collectionSummary.total_details ?? 0 }}/{{ collectionSummary.total_jobs ?? 0 }} 个岗位</small></summary>
             <div class="collection-summary-head"><div><p class="kicker">岗位市场摘要</p><h3>基于本次详情 JD 汇总</h3></div><small v-if="collectionSummary">详情 {{ collectionSummary.total_details ?? 0 }}/{{ collectionSummary.total_jobs ?? 0 }} 个岗位</small></div>
             <p v-if="collectionSummaryText" class="collection-summary-text">{{ collectionSummaryText }}</p>
             <p v-else class="collection-summary-empty">尚无摘要。采集并抓取详情 JD 完成后会在这里生成。</p>
             <div v-if="collectionSummary" class="summary-facts">
               <span v-if="formatSummaryItems(collectionSummary.salary_ranges) !== '—'">薪资：{{ formatSummaryItems(collectionSummary.salary_ranges) }}</span><span v-if="formatSummaryItems(collectionSummary.experience) !== '—'">经验：{{ formatSummaryItems(collectionSummary.experience) }}</span><span v-if="formatSummaryItems(collectionSummary.degrees) !== '—'">学历：{{ formatSummaryItems(collectionSummary.degrees) }}</span><span v-if="formatSummaryItems(collectionSummary.districts) !== '—'">区域：{{ formatSummaryItems(collectionSummary.districts) }}</span><span v-if="formatSummaryItems(collectionSummary.companies) !== '—'">公司：{{ formatSummaryItems(collectionSummary.companies) }}</span><span v-if="formatSummaryItems(collectionSummary.skill_tags) !== '—'">技能：{{ formatSummaryItems(collectionSummary.skill_tags) }}</span><span v-if="formatSummaryItems(collectionSummary.jd_terms) !== '—'">JD 高频词：{{ formatSummaryItems(collectionSummary.jd_terms) }}</span>
             </div>
-          </section>
-          <div class="tabs"><button type="button" :class="{ active: resultTab === 'new_published' }" @click="resultTab = 'new_published'">新发布 / 本次新发现 {{ results.new_published.length }}/10</button><button type="button" :class="{ active: resultTab === 'new_active' }" @click="resultTab = 'new_active'">新活跃 {{ results.new_active.length }}/10</button></div>
+          </details>
+          <div class="tabs"><button type="button" :class="{ active: resultTab === 'new_published' }" @click="resultTab = 'new_published'">新发布 / 本次新发现 <span>{{ results.new_published.length }}</span></button><button type="button" :class="{ active: resultTab === 'new_active' }" @click="resultTab = 'new_active'">新活跃（刚刚活跃） <span>{{ results.new_active.length }}</span></button></div>
           <p v-if="!currentResults.length" class="empty">这个结果池暂时为空。完成一次匹配后再回来查看。</p>
           <article v-for="item in currentResults" :key="item.job_id" class="job-card">
-            <div class="score"><strong>{{ item.score }}</strong><small>匹配分</small></div><div class="job-main"><div><span class="rank">#{{ item.rank }}</span><h3>{{ item.title }}</h3><small>{{ item.company_name || '公司未知' }} · {{ [item.city, item.experience, item.degree, item.salary].filter(Boolean).join(' · ') }}</small></div><p>{{ item.reason }}</p><div v-if="jobSummary(item) || item.detail_status || item.detail_page_status || item.jd_status || item.jd_text" class="job-detail-meta"><span class="detail-status" :class="detailStatusClass(item)">{{ detailStatus(item) }}</span><span v-if="item.active_status">活跃状态：{{ item.active_status }}</span></div><div v-if="jobSummary(item)" class="jd-summary"><strong>JD 摘要</strong><p>{{ jobSummary(item) }}</p></div><div class="evidence"><span>优势：{{ join(item.strengths) }}</span><span>缺口：{{ join(item.gaps) }}</span></div></div><a :href="item.job_url" target="_blank" rel="noopener noreferrer">在 BOSS 查看 ↗</a>
+            <div class="score"><strong>{{ item.score }}</strong><small>匹配分</small></div><div class="job-main"><div><span class="rank">#{{ item.rank }}</span><h3>{{ item.title }}</h3><small>{{ item.company_name || '公司未知' }} · {{ [item.city, item.experience, item.degree, item.salary].filter(Boolean).join(' · ') }}</small></div><p>{{ item.reason }}</p><div v-if="jobSummary(item) || item.detail_status || item.detail_page_status || item.jd_status || item.jd_text || jobActiveStatus(item)" class="job-detail-meta"><span class="detail-status" :class="detailStatusClass(item)">{{ detailStatus(item) }}</span><span v-if="jobActiveStatus(item)" class="active-status">BOSS {{ jobActiveStatus(item) }}</span></div><div v-if="jobSummary(item)" class="jd-summary"><strong>JD 摘要</strong><p>{{ jobSummary(item) }}</p></div><div class="evidence"><span>优势：{{ join(item.strengths) }}</span><span>缺口：{{ join(item.gaps) }}</span></div></div><a :href="item.job_url" target="_blank" rel="noopener noreferrer">在 BOSS 查看 ↗</a>
           </article>
         </article>
       </section>
@@ -142,6 +152,7 @@
     </main>
   </div>
   <script src="/vendor/vue.global.prod.js"></script>
+  <script src="/city-options.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

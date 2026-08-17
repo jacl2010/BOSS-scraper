@@ -107,6 +107,21 @@ class MatchStatus(BaseModel):
     message: str = "等待手动开始匹配"
 
 
+class MatchStartRequest(BaseModel):
+    """A matching run always targets one explicitly selected resume."""
+
+    model_config = ConfigDict(extra="forbid")
+    resume_id: str = Field(min_length=1)
+
+    @field_validator("resume_id")
+    @classmethod
+    def validate_resume_id(cls, value: str) -> str:
+        candidate = value.strip()
+        if not candidate:
+            raise ValueError("必须选择一份简历")
+        return candidate
+
+
 class CanonicalJob(BaseModel):
     id: str
     title: str
@@ -154,7 +169,7 @@ class ScoredJob(BaseModel):
 class MatchResult(BaseModel):
     job_id: str
     pool: Literal["new_published", "new_active"]
-    rank: int = Field(ge=1, le=10)
+    rank: int = Field(ge=1)
     score: int = Field(ge=0, le=100)
     title: str
     company_name: str | None = None

@@ -182,6 +182,33 @@ def test_first_discovery_and_active_transition_pools_are_exclusive():
     assert pools.new_active == []
 
 
+def test_changed_job_is_rechecked_without_a_pool_size_limit():
+    source = normalize_job(json.loads(FIXTURE_PATH.read_text())[0])
+    jobs = [source.model_copy(update={"id": f"job-{index}"}) for index in range(25)]
+    pools = select_candidate_pools(
+        jobs,
+        previous_buckets={job.id: "recent" for job in jobs},
+        newly_seen=set(),
+        changed_ids={job.id for job in jobs},
+    )
+
+    assert [job.id for job in pools.new_published] == [f"job-{index}" for index in range(25)]
+    assert pools.new_active == []
+
+
+def test_new_active_pool_only_keeps_just_active_raw_status():
+    just_active = normalize_job(json.loads(FIXTURE_PATH.read_text())[0])
+    today_active = just_active.model_copy(update={"id": "today", "active_status_raw": "今日活跃", "active_bucket": "recent"})
+    pools = select_candidate_pools(
+        [just_active, today_active],
+        previous_buckets={just_active.id: "recent", today_active.id: "inactive"},
+        newly_seen=set(),
+        previous_active_statuses={just_active.id: "今日活跃", today_active.id: "两周内活跃"},
+    )
+
+    assert [job.id for job in pools.new_active] == [just_active.id]
+
+
 def test_first_scan_active_job_enters_new_active_pool():
     job = normalize_job(json.loads(FIXTURE_PATH.read_text())[0])
     pools = select_candidate_pools([job], previous_buckets={}, newly_seen=set())
@@ -194,11 +221,11 @@ def test_inactive_to_active_transition_enters_new_active_pool():
     assert [item.id for item in pools.new_active] == ["new-job"]
 
 
-def test_sorting_is_descending_stable_top_ten_and_omits_unscored():
+def test_sorting_is_descending_stable_and_retains_all_scored_jobs():
     scored = [
         ScoredJob(job_id=f"job-{index}", score=100 - index, reason="匹配", strengths=[], gaps=[])
         for index in range(12)
     ]
     result = sort_scored_results(scored)
 
-    assert [item.job_id for item in result] == [f"job-{index}" for index in range(10)]
+    assert [item.job_id for item in result] == [f"job-{index}" for index in range(12)]
