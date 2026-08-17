@@ -243,6 +243,7 @@ def test_fake_api_core_loop_is_isolated_and_idle_has_zero_external_calls(tmp_pat
     first_results = client.get(f"/api/resumes/{first.json()['id']}/results").json()
     second_results = client.get(f"/api/resumes/{second.json()['id']}/results").json()
     assert [item["job_id"] for item in first_results["new_published"]] == ["job-fixture"]
+    assert first_results["new_published"][0]["jd_text"] == "Python FastAPI 后端开发"
     assert first_results["new_active"] == []
     assert first_results["collection_summary"]["total_details"] == 1
     assert first_results["collection_summary"]["formatted_summary"] == "岗位市场摘要: Python @ 上海"
