@@ -62,10 +62,16 @@ class LlmService:
         return f"{key[:3]}****{key[-4:]}" if len(key) > 7 else "****"
 
     def _client(self, settings: LlmSettingsInput | dict, api_key: str | None = None) -> ChatOpenAI:
+        base_url = settings["base_url"] if isinstance(settings, dict) else settings.base_url
+        model = settings["model"] if isinstance(settings, dict) else settings.model
+        thinking_enabled = settings.get("thinking_enabled", True) if isinstance(settings, dict) else settings.thinking_enabled
+        reasoning_effort = settings.get("reasoning_effort", "low") if isinstance(settings, dict) else settings.reasoning_effort
         return ChatOpenAI(
-            base_url=settings["base_url"] if isinstance(settings, dict) else settings.base_url,
-            model=settings["model"] if isinstance(settings, dict) else settings.model,
+            base_url=base_url,
+            model=model,
             api_key=self._api_key(api_key), temperature=0, timeout=30,
+            reasoning_effort=reasoning_effort,
+            extra_body={"thinking": {"type": "enabled" if thinking_enabled else "disabled"}},
         )
 
     def test_and_save(self, settings: LlmSettingsInput, api_key: str | None = None) -> LlmSettingsView:

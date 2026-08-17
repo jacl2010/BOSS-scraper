@@ -6,6 +6,15 @@ import json
 import os
 from pathlib import Path
 
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AuthenticationError,
+    BadRequestError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+)
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -21,6 +30,22 @@ from app.schemas import LlmSettingsInput, LlmSettingsView, ResumePatch
 
 def _error(status: int, message: str, code: str = "invalid_request") -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code, "message": message})
+
+
+def _llm_configuration_message(error: Exception) -> str:
+    messages = (
+        (AuthenticationError, "LLM API Key 无效或已失效"),
+        (PermissionDeniedError, "LLM API Key 没有访问该模型的权限"),
+        (NotFoundError, "未找到 LLM 服务地址或模型"),
+        (BadRequestError, "LLM 请求参数不被服务商接受"),
+        (RateLimitError, "LLM 请求过于频繁或额度不足"),
+        (APITimeoutError, "LLM 服务响应超时"),
+        (APIConnectionError, "无法连接 LLM 服务"),
+    )
+    for error_type, message in messages:
+        if isinstance(error, error_type):
+            return message
+    return "LLM 配置测试失败，请检查地址、模型和环境变量"
 
 
 def create_app(database: Database | None = None, llm=None, boss=None) -> FastAPI:
@@ -66,10 +91,10 @@ def create_app(database: Database | None = None, llm=None, boss=None) -> FastAPI
         except ValueError as exc:
             message = str(exc)
             if "BOSS_MATCHER_LLM_API_KEY" not in message:
-                message = "LLM 配置测试失败，请检查地址、模型和环境变量"
+                message = _llm_configuration_message(exc)
             raise _error(422, message, "llm_configuration_failed") from exc
-        except Exception:
-            raise _error(422, "LLM 配置测试失败，请检查地址、模型和环境变量")
+        except Exception as exc:
+            raise _error(422, _llm_configuration_message(exc), "llm_configuration_failed") from exc
 
     @app.get("/api/resumes")
     def list_resumes():

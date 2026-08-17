@@ -9,8 +9,8 @@ createApp({
         { route: '/matches', code: 'AI', label: 'BOSS 岗位匹配' },
         { route: '/llm', code: 'KEY', label: 'LLM API Key' },
       ],
-      llm: { base_url: '', model: '', key_configured: false, api_key_masked: '', tested_at: null },
-      llmForm: { base_url: '', model: '', api_key: '' },
+      llm: { base_url: '', model: '', key_configured: false, api_key_masked: '', tested_at: null, thinking_enabled: true, reasoning_effort: 'low' },
+      llmForm: { base_url: '', model: '', api_key: '', thinking_enabled: true, reasoning_effort: 'low' },
       resumes: [], selectedResumeId: '', resultResumeId: '',
       conditionForm: { job_keyword: '', city: '', experience: '不限', degree: '不限', salary: '不限', monitor_enabled: false },
       boss: { state: 'unknown', message: '' },
@@ -61,11 +61,11 @@ createApp({
       else if (this.matchStatus.status === 'running') this.beginPolling();
     },
     flash(text, type = 'info') { this.notice = { text, type }; },
-    async loadLlm() { const data = await this.api('/api/llm-settings'); if (data) { this.llm = data; this.llmForm = { base_url: data.base_url, model: data.model, api_key: '' }; } },
+    async loadLlm() { const data = await this.api('/api/llm-settings'); if (data) { this.llm = data; this.llmForm = { base_url: data.base_url, model: data.model, api_key: '', thinking_enabled: data.thinking_enabled, reasoning_effort: data.reasoning_effort }; } },
     async saveLlm() {
       this.busy.llm = true;
       try {
-        const payload = { base_url: this.llmForm.base_url, model: this.llmForm.model };
+        const payload = { base_url: this.llmForm.base_url, model: this.llmForm.model, thinking_enabled: this.llmForm.thinking_enabled, reasoning_effort: this.llmForm.reasoning_effort };
         if (this.llmForm.api_key) payload.api_key = this.llmForm.api_key;
         this.llm = await this.api('/api/llm-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         this.llmForm.api_key = '';

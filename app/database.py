@@ -53,7 +53,9 @@ class Database:
                 """
                 CREATE TABLE IF NOT EXISTS llm_settings (
                     id INTEGER PRIMARY KEY CHECK (id = 1), base_url TEXT NOT NULL,
-                    model TEXT NOT NULL, tested_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                    model TEXT NOT NULL, tested_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    thinking_enabled INTEGER NOT NULL DEFAULT 1,
+                    reasoning_effort TEXT NOT NULL DEFAULT 'low'
                 );
                 CREATE TABLE IF NOT EXISTS resumes (
                     id TEXT PRIMARY KEY, filename TEXT NOT NULL, file_path TEXT NOT NULL,
@@ -77,22 +79,41 @@ class Database:
                 );
                 """
             )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(llm_settings)")}
+            if "thinking_enabled" not in columns:
+                conn.execute("ALTER TABLE llm_settings ADD COLUMN thinking_enabled INTEGER NOT NULL DEFAULT 1")
+            if "reasoning_effort" not in columns:
+                conn.execute("ALTER TABLE llm_settings ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'low'")
 
     def get_llm_settings(self) -> dict | None:
         with self.transaction() as conn:
-            row = conn.execute("SELECT base_url, model, tested_at FROM llm_settings WHERE id = 1").fetchone()
-        return dict(row) if row else None
+            row = conn.execute(
+                "SELECT base_url, model, tested_at, thinking_enabled, reasoning_effort FROM llm_settings WHERE id = 1"
+            ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["thinking_enabled"] = bool(result["thinking_enabled"])
+        return result
 
     def save_llm_settings(self, settings: LlmSettingsInput) -> dict:
         now = utc_now()
         with self.transaction() as conn:
             conn.execute(
-                """INSERT INTO llm_settings(id, base_url, model, tested_at, updated_at) VALUES (1, ?, ?, ?, ?)
+                """INSERT INTO llm_settings(id, base_url, model, tested_at, updated_at, thinking_enabled, reasoning_effort)
+                VALUES (1, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET base_url=excluded.base_url, model=excluded.model,
-                tested_at=excluded.tested_at, updated_at=excluded.updated_at""",
-                (settings.base_url, settings.model, now, now),
+                tested_at=excluded.tested_at, updated_at=excluded.updated_at,
+                thinking_enabled=excluded.thinking_enabled, reasoning_effort=excluded.reasoning_effort""",
+                (settings.base_url, settings.model, now, now, settings.thinking_enabled, settings.reasoning_effort),
             )
-        return {"base_url": settings.base_url, "model": settings.model, "tested_at": now}
+        return {
+            "base_url": settings.base_url,
+            "model": settings.model,
+            "tested_at": now,
+            "thinking_enabled": settings.thinking_enabled,
+            "reasoning_effort": settings.reasoning_effort,
+        }
 
     def count_resumes(self) -> int:
         with self.transaction() as conn:

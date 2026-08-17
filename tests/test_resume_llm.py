@@ -64,11 +64,102 @@ def test_llm_configuration_saves_only_non_secret_fields(database, monkeypatch):
     assert "private-key" not in repr(row)
 
 
-def test_llm_requires_environment_key(database, monkeypatch):
+def test_llm_settings_default_to_enabled_low_thinking(database, monkeypatch):
+    monkeypatch.setenv("BOSS_MATCHER_LLM_API_KEY", "private-key")
+    llm = LlmService(database)
+    monkeypatch.setattr(llm, "test_settings", lambda settings, api_key=None: True)
+
+    saved = llm.test_and_save(LlmSettingsInput(base_url="https://example.test/v1", model="test"))
+
+    assert saved.thinking_enabled is True
+    assert saved.reasoning_effort == "low"
+    assert database.get_llm_settings()["thinking_enabled"] is True
+    assert database.get_llm_settings()["reasoning_effort"] == "low"
+
+
+def test_llm_settings_persist_deepseek_thinking_configuration(database, monkeypatch):
+    monkeypatch.setenv("BOSS_MATCHER_LLM_API_KEY", "private-key")
+    llm = LlmService(database)
+    monkeypatch.setattr(llm, "test_settings", lambda settings, api_key=None: True)
+    input_settings = LlmSettingsInput(
+        base_url="https://api.deepseek.com",
+        model="deepseek-v4-flash",
+        thinking_enabled=False,
+        reasoning_effort="max",
+    )
+
+    saved = llm.test_and_save(input_settings)
+
+    assert saved.thinking_enabled is False
+    assert saved.reasoning_effort == "max"
+    assert database.get_llm_settings()["thinking_enabled"] is False
+    assert database.get_llm_settings()["reasoning_effort"] == "max"
+
+
+def test_existing_llm_settings_database_is_migrated_with_thinking_defaults(tmp_path):
+    db_path = tmp_path / "app.db"
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """CREATE TABLE llm_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1), base_url TEXT NOT NULL,
+        model TEXT NOT NULL, tested_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        )"""
+    )
+    connection.execute(
+        "INSERT INTO llm_settings VALUES (1, 'https://example.test/v1', 'test', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+    )
+    connection.commit()
+    connection.close()
+
+    database = Database(db_path, tmp_path / "resumes")
+
+    assert database.get_llm_settings() == {
+        "base_url": "https://example.test/v1",
+        "model": "test",
+        "tested_at": "2026-01-01T00:00:00+00:00",
+        "thinking_enabled": True,
+        "reasoning_effort": "low",
+    }
+
+
+def test_llm_client_passes_deepseek_thinking_parameters(database, monkeypatch):
+    captured = {}
+
+    class CapturingChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("app.llm.ChatOpenAI", CapturingChatOpenAI)
+    llm = LlmService(database)
+
+    llm._client(
+        LlmSettingsInput(
+            base_url="https://api.deepseek.com",
+            model="deepseek-v4-flash",
+            thinking_enabled=False,
+            reasoning_effort="high",
+        ),
+        api_key="sk-test-secret",
+    )
+
+    assert captured["reasoning_effort"] == "high"
+    assert captured["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_llm_settings_reject_unknown_reasoning_effort():
+    with pytest.raises(ValidationError):
+        LlmSettingsInput(
+            base_url="https://api.deepseek.com",
+            model="deepseek-v4-flash",
+            reasoning_effort="medium",
+        )
+
+
+def test_llm_requires_environment_key(database, monkeypatch, tmp_path):
     monkeypatch.delenv("BOSS_MATCHER_LLM_API_KEY", raising=False)
 
     with pytest.raises(ValueError, match="BOSS_MATCHER_LLM_API_KEY"):
-        LlmService(database).test_and_save(
+        LlmService(database, env_path=tmp_path / ".env").test_and_save(
             LlmSettingsInput(base_url="https://example.test/v1", model="test")
         )
 

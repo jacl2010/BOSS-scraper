@@ -1,6 +1,9 @@
 import time
 
 import fitz
+import httpx
+import openai
+import pytest
 from fastapi.testclient import TestClient
 
 from app.database import Database
@@ -92,6 +95,43 @@ class FakeBoss:
                 active_bucket="active",
             )
         ]
+
+
+@pytest.mark.parametrize(
+    ("error_type", "expected_message"),
+    [
+        (openai.AuthenticationError, "LLM API Key 无效或已失效"),
+        (openai.PermissionDeniedError, "LLM API Key 没有访问该模型的权限"),
+        (openai.NotFoundError, "未找到 LLM 服务地址或模型"),
+        (openai.BadRequestError, "LLM 请求参数不被服务商接受"),
+        (openai.RateLimitError, "LLM 请求过于频繁或额度不足"),
+        (openai.APIConnectionError, "无法连接 LLM 服务"),
+        (openai.APITimeoutError, "LLM 服务响应超时"),
+    ],
+)
+def test_llm_configuration_returns_safe_provider_error_messages(tmp_path, error_type, expected_message):
+    database = Database(tmp_path / "app.db", tmp_path / "resumes")
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+    if error_type in {openai.APIConnectionError, openai.APITimeoutError}:
+        provider_error = error_type(request=request)
+    else:
+        response = httpx.Response(400, request=request)
+        provider_error = error_type("Authorization: sk-sensitive-provider-message", response=response, body=None)
+
+    class FailingLlm(FakeLlm):
+        def test_and_save(self, settings, api_key=None):
+            raise provider_error
+
+    client = TestClient(create_app(database=database, llm=FailingLlm(database)))
+    response = client.put(
+        "/api/llm-settings",
+        json={"base_url": "https://api.deepseek.com", "model": "deepseek-v4-flash", "api_key": "sk-user-secret"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["message"] == expected_message
+    assert "sk-user-secret" not in response.text
+    assert "sk-sensitive-provider-message" not in response.text
 
 
 def test_fake_api_core_loop_is_isolated_and_idle_has_zero_external_calls(tmp_path, monkeypatch):

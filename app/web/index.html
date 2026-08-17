@@ -49,6 +49,8 @@
           <label>服务地址<input v-model.trim="llmForm.base_url" type="url" placeholder="https://api.example.com/v1" autocomplete="off"></label>
           <label>模型标识<input v-model.trim="llmForm.model" type="text" placeholder="deepseek-v4flash" autocomplete="off"></label>
           <label>API Key<input v-model.trim="llmForm.api_key" type="password" placeholder="输入后保存到本机 .env" autocomplete="new-password"></label>
+          <label class="switch"><input v-model="llmForm.thinking_enabled" type="checkbox"><span></span>启用 Thinking</label>
+          <label>思考强度<select v-model="llmForm.reasoning_effort" :disabled="!llmForm.thinking_enabled"><option value="low">low</option><option value="high">high</option><option value="max">max</option></select></label>
           <div class="secret-boundary">
             <strong>Key 只保存在本机</strong>
             <p>测试成功后写入项目根目录 <code>.env</code> 的 <code>BOSS_MATCHER_LLM_API_KEY</code>。该文件已被 Git 忽略，不提交、不 push。</p>
@@ -57,7 +59,7 @@
             {{ busy.llm ? '正在验证…' : '测试并保存' }}
           </button>
         </article>
-        <aside class="panel quiet-panel"><p class="kicker">当前状态</p><h2>{{ llm.tested_at ? '已通过连接测试' : '尚未验证' }}</h2><dl><dt>模型</dt><dd>{{ llm.model || '—' }}</dd><dt>Key</dt><dd>{{ llm.api_key_masked || '未配置' }}</dd><dt>最近测试</dt><dd>{{ formatTime(llm.tested_at) }}</dd></dl></aside>
+        <aside class="panel quiet-panel"><p class="kicker">当前状态</p><h2>{{ llm.tested_at ? '已通过连接测试' : '尚未验证' }}</h2><dl><dt>模型</dt><dd>{{ llm.model || '—' }}</dd><dt>Thinking</dt><dd>{{ llm.thinking_enabled ? '已启用' : '已关闭' }}</dd><dt>思考强度</dt><dd>{{ llm.reasoning_effort || 'low' }}</dd><dt>Key</dt><dd>{{ llm.api_key_masked || '未配置' }}</dd><dt>最近测试</dt><dd>{{ formatTime(llm.tested_at) }}</dd></dl></aside>
       </section>
 
       <section v-if="route === '/resumes'" class="resume-layout">

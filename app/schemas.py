@@ -14,6 +14,8 @@ class LlmSettingsInput(BaseModel):
     base_url: str = Field(min_length=1)
     model: str = Field(min_length=1)
     api_key: str | None = Field(default=None, min_length=1)
+    thinking_enabled: bool = True
+    reasoning_effort: Literal["low", "high", "max"] = "low"
 
     @field_validator("base_url")
     @classmethod
@@ -34,6 +36,8 @@ class LlmSettingsView(BaseModel):
     api_key_masked: str
     model: str
     tested_at: datetime
+    thinking_enabled: bool = True
+    reasoning_effort: Literal["low", "high", "max"] = "low"
 
 
 class ResumeProfile(BaseModel):
