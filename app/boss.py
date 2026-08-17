@@ -7,6 +7,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
+from urllib.error import URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 from pathlib import Path
 
 from scripts.job_summary import build_summary, format_summary
@@ -31,6 +35,21 @@ SALARY_BUCKETS = (
     (0, 3, "402"), (3, 5, "403"), (5, 10, "404"), (10, 20, "405"),
     (20, 50, "406"), (50, None, "407"),
 )
+BOSS_HOMEPAGE = "https://www.zhipin.com"
+
+
+def _open_boss_homepage(cdp_port: int = 9222) -> bool:
+    """Open BOSS in the scraper-owned Chrome once its CDP endpoint is ready."""
+
+    endpoint = f"http://127.0.0.1:{cdp_port}/json/new?{quote(BOSS_HOMEPAGE, safe=':/')}"
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(Request(endpoint, method="PUT"), timeout=1):
+                return True
+        except (OSError, URLError):
+            time.sleep(0.2)
+    return False
 
 
 class CollectedJobs(list[CanonicalJob]):
@@ -181,7 +200,7 @@ def build_job_market_summary(
             "degree": conditions.degree,
             "salary": conditions.salary,
         },
-        pages=2,
+        pages=conditions.pages,
         formatted_summary=format_summary(values),
     )
 
@@ -213,7 +232,9 @@ class BossAdapter:
             subprocess.Popen([self.command, "--setup-chrome", "--no-wait-login"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError:
             return BossStatus(state="chrome_unavailable", message="无法启动 BOSS 专用 Chrome")
-        return BossStatus(state="login_required", message="BOSS 专用 Chrome 已打开，请手动登录")
+        if not _open_boss_homepage():
+            return BossStatus(state="chrome_unavailable", message="BOSS 专用 Chrome 已启动，但未能打开 BOSS 首页")
+        return BossStatus(state="login_required", message="BOSS 专用 Chrome 已打开并进入 BOSS 首页，请手动登录")
 
     def collect(self, conditions: ResumeConditions) -> CollectedJobs:
         if not shutil.which(self.command):
@@ -226,7 +247,7 @@ class BossAdapter:
             # fallback).  Do not pre-resolve it here or duplicate that logic.
             args = [
                 self.command, "--keyword", conditions.job_keyword, "--city", conditions.city,
-                "--pages", "2", "--detail", "--output", str(output),
+                "--pages", str(conditions.pages), "--detail", "--output", str(output),
                 "--detail-output", str(detail_output), "--format", "json",
             ]
             for flag, value in (

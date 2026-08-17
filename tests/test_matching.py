@@ -97,12 +97,12 @@ def test_collect_uses_and_reads_pinned_cli_detail_output(monkeypatch):
     monkeypatch.setattr("app.boss.subprocess.run", fake_run)
     jobs = BossAdapter().collect(
         ResumeConditions(
-            job_keyword="Python", city="上海", experience="3-5年", degree="本科", salary="20-30K"
+            job_keyword="Python", city="上海", experience="3-5年", degree="本科", salary="20-30K", pages=7
         )
     )
 
     assert "--detail-output" in observed["args"]
-    assert observed["args"][observed["args"].index("--pages") + 1] == "2"
+    assert observed["args"][observed["args"].index("--pages") + 1] == "7"
     assert "--detail" in observed["args"]
     assert "--max-details" not in observed["args"]
     assert observed["timeout"] == 6000
@@ -112,9 +112,23 @@ def test_collect_uses_and_reads_pinned_cli_detail_output(monkeypatch):
     ] == ["406", "105", "203"]
     assert [job.id for job in jobs] == ["cli-job"]
     assert jobs.summary.total_jobs == jobs.summary.total_details == 1
-    assert jobs.summary.pages == 2
+    assert jobs.summary.pages == 7
     assert jobs.summary.filters == {"experience": "3-5年", "degree": "本科", "salary": "20-30K"}
     assert "岗位市场摘要: Python @ 上海" in jobs.summary.formatted_summary
+
+
+def test_setup_opens_boss_homepage_in_the_dedicated_chrome(monkeypatch):
+    launched, opened_urls = [], []
+
+    monkeypatch.setattr("app.boss.shutil.which", lambda command: "/fake/boss-scraper")
+    monkeypatch.setattr("app.boss.subprocess.Popen", lambda args, **kwargs: launched.append(args))
+    monkeypatch.setattr("app.boss._open_boss_homepage", lambda: opened_urls.append("https://www.zhipin.com") or True, raising=False)
+
+    status = BossAdapter().setup()
+
+    assert status.state == "login_required"
+    assert launched == [["boss-scraper", "--setup-chrome", "--no-wait-login"]]
+    assert opened_urls == ["https://www.zhipin.com"]
 
 
 def test_conditions_default_blank_city_to_beijing():

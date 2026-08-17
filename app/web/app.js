@@ -1,5 +1,74 @@
 const { createApp } = Vue;
 
+const SelectMenu = {
+  inheritAttrs: false,
+  props: {
+    modelValue: { type: [String, Number], default: '' },
+    options: { type: Array, default: () => [] },
+    placeholder: { type: String, default: '请选择' },
+    disabled: Boolean,
+    labelKey: { type: String, default: '' },
+    valueKey: { type: String, default: '' },
+  },
+  emits: ['update:modelValue', 'change'],
+  data() { return { open: false, openUpward: false, popoverMaxHeight: 248 }; },
+  computed: {
+    selected() { return this.options.find((option) => this.optionValue(option) === this.modelValue); },
+    selectedLabel() { return this.selected ? this.optionLabel(this.selected) : ''; },
+  },
+  mounted() {
+    document.addEventListener('pointerdown', this.closeOnOutside);
+    window.addEventListener('resize', this.syncPopoverPosition);
+    window.addEventListener('scroll', this.syncPopoverPosition, true);
+  },
+  beforeUnmount() {
+    document.removeEventListener('pointerdown', this.closeOnOutside);
+    window.removeEventListener('resize', this.syncPopoverPosition);
+    window.removeEventListener('scroll', this.syncPopoverPosition, true);
+  },
+  methods: {
+    optionLabel(option) { return option?.label ?? (this.labelKey ? option?.[this.labelKey] : option); },
+    optionValue(option) { return option?.value ?? (this.valueKey ? option?.[this.valueKey] : option); },
+    toggle() {
+      if (this.disabled) return;
+      this.open = !this.open;
+      if (this.open) this.$nextTick(this.syncPopoverPosition);
+    },
+    choose(option) {
+      this.$emit('update:modelValue', this.optionValue(option));
+      this.$emit('change');
+      this.open = false;
+    },
+    closeOnOutside(event) { if (!this.$el.contains(event.target)) this.open = false; },
+    close() { this.open = false; },
+    syncPopoverPosition() {
+      if (!this.open) return;
+      const trigger = this.$el.querySelector('.select-trigger');
+      if (!trigger) return;
+      const viewportPadding = 16;
+      const preferredHeight = 248;
+      const rect = trigger.getBoundingClientRect();
+      const roomBelow = Math.max(0, window.innerHeight - rect.bottom - viewportPadding);
+      const roomAbove = Math.max(0, rect.top - viewportPadding);
+      this.openUpward = roomBelow < preferredHeight && roomAbove > roomBelow;
+      this.popoverMaxHeight = Math.floor(Math.min(preferredHeight, this.openUpward ? roomAbove : roomBelow));
+    },
+  },
+  template: `
+    <div class="select-menu" :class="{ open, disabled, 'open-upward': openUpward }">
+      <button v-bind="$attrs" class="select-trigger" type="button" :disabled="disabled"
+        :aria-expanded="String(open)" aria-haspopup="listbox" @click="toggle" @keydown.esc="close">
+        <span>{{ selectedLabel || placeholder }}</span><i aria-hidden="true"></i>
+      </button>
+      <div v-if="open" class="select-popover" role="listbox" :style="{ maxHeight: popoverMaxHeight + 'px' }">
+        <button v-for="option in options" :key="optionValue(option)" type="button" role="option"
+          :aria-selected="optionValue(option) === modelValue" :class="{ selected: optionValue(option) === modelValue }"
+          @click="choose(option)">{{ optionLabel(option) }}</button>
+      </div>
+    </div>
+  `,
+};
+
 createApp({
   data() {
     return {
@@ -12,11 +81,13 @@ createApp({
       llm: { base_url: '', model: '', key_configured: false, api_key_masked: '', tested_at: null, thinking_enabled: true, reasoning_effort: 'low' },
       llmForm: { base_url: '', model: '', api_key: '', thinking_enabled: true, reasoning_effort: 'low' },
       resumes: [], selectedResumeId: '', resultResumeId: '',
-      conditionForm: { job_keyword: '', city: '北京', experience: '不限', degree: '不限', salary: '不限', monitor_enabled: false },
+      conditionForm: { job_keyword: '', city: '北京', experience: '不限', degree: '不限', salary: '不限', pages: 2, monitor_enabled: false },
       cityOptions: window.CITY_OPTIONS || [],
       experienceOptions: ['1-3年', '3-5年', '5-10年', '10年以上'],
       degreeOptions: ['大专', '本科', '硕士', '博士'],
       salaryOptions: ['10-20K', '20-50K', '50K以上'],
+      pageOptions: Array.from({ length: 10 }, (_, index) => index + 1),
+      reasoningOptions: ['low', 'high', 'max'],
       boss: { state: 'unknown', message: '' },
       matchStatus: { status: 'idle', stage: 'idle', progress_current: 0, progress_total: 0, message: '' },
       results: { new_published: [], new_active: [], collection_summary: null }, resultTab: 'new_published', runningResumeId: '',
@@ -32,15 +103,20 @@ createApp({
   computed: {
     pageMeta() {
       return {
-        '/resumes': { eyebrow: 'RESUME WORKBENCH', title: '把简历变成可匹配的信号', description: '上传文本型 PDF，检查 AI 摘要，并为每份简历保存独立条件。' },
-        '/matches': { eyebrow: 'MANUAL MATCH RUN', title: '先选择简历，再读完整结果', description: '按这份简历的条件采集岗位，只对新发现或内容变化的职位进行评分。' },
-        '/llm': { eyebrow: 'MODEL CONNECTION', title: '连接你信任的大模型', description: '在页面测试配置，Key 成功后只保存在本机 .env。' },
+        '/resumes': { eyebrow: 'RESUME WORKBENCH', title: '简历管理', description: '上传文本型 PDF，检查 AI 摘要，并为每份简历保存独立条件。' },
+        '/matches': { eyebrow: 'MANUAL MATCH RUN', title: 'BOSS 岗位匹配', description: '按这份简历的条件采集岗位，只对新发现或内容变化的职位进行评分。' },
+        '/llm': { eyebrow: 'MODEL CONNECTION', title: 'LLM API Key', description: '' },
       }[this.route] || { eyebrow: '', title: '', description: '' };
     },
     selectedResume() { return this.resumes.find((item) => item.id === this.selectedResumeId); },
     resultResume() { return this.resumes.find((item) => item.id === this.resultResumeId); },
     eligibleResumes() { return this.resumes.filter((item) => item.status === 'ready' && item.monitor_enabled && this.conditionsComplete(item.conditions)); },
-    currentResults() { return this.results[this.resultTab] || []; },
+    matchResumeOptions() { return this.eligibleResumes.map((resume) => ({ value: resume.id, label: resume.profile?.title || resume.filename })); },
+    newActiveResults() {
+      return [...(this.results.new_published || []), ...(this.results.new_active || [])]
+        .filter((item) => this.jobActiveStatus(item) === '刚刚活跃');
+    },
+    currentResults() { return this.resultTab === 'new_active' ? this.newActiveResults : (this.results.new_published || []); },
     resultQuery() {
       const source = this.collectionSummary?.filters || this.results.query || this.results.conditions || this.results.search_conditions || {};
       const fallback = this.resultResume?.conditions || {};
@@ -50,6 +126,7 @@ createApp({
         experience: source.experience || this.results.experience || fallback.experience || '不限',
         degree: source.degree || this.results.degree || fallback.degree || '不限',
         salary: source.salary || this.results.salary || fallback.salary || '不限',
+        pages: source.pages || this.results.pages || fallback.pages || 2,
       };
     },
     collectionSummary() {
@@ -116,7 +193,7 @@ createApp({
     },
     selectResume(id) {
       this.selectedResumeId = id; const resume = this.resumes.find((item) => item.id === id); const c = resume?.conditions || {};
-      this.conditionForm = { job_keyword: c.job_keyword || '', city: c.city || '北京', experience: c.experience || '不限', degree: c.degree || '不限', salary: c.salary || '不限', monitor_enabled: Boolean(resume?.monitor_enabled) };
+      this.conditionForm = { job_keyword: c.job_keyword || '', city: c.city || '北京', experience: c.experience || '不限', degree: c.degree || '不限', salary: c.salary || '不限', pages: c.pages || 2, monitor_enabled: Boolean(resume?.monitor_enabled) };
     },
     async uploadFiles(event) {
       const files = [...event.target.files]; event.target.value = ''; this.busy.upload = true;
@@ -161,6 +238,10 @@ createApp({
       try {
         this.results = await this.api(`/api/resumes/${this.resultResumeId}/results`);
       } catch (error) { this.flash(error.message, 'error'); }
+    },
+    optionsWithCurrent(options, value, key = '') {
+      const hasCurrent = options.some((option) => (key ? option[key] : option) === value);
+      return hasCurrent || !value ? options : [{ value, label: `当前值：${value}（请重新选择）` }, ...options];
     },
     conditionsComplete(c) { return Boolean(c?.job_keyword?.trim() && c?.city?.trim() && c?.experience?.trim() && c?.degree?.trim() && c?.salary?.trim()); },
     stageClass(key) { const order = this.stages.map((item) => item.key); const current = order.indexOf(this.matchStatus.stage); const index = order.indexOf(key); return { active: index === current && this.matchStatus.status === 'running', done: (current > index) || this.matchStatus.status === 'completed' }; },
@@ -207,4 +288,4 @@ createApp({
       return this.jobSummary(item) || item?.jd_text || status === 'success' || status === 'completed' || status === 'fetched' || status === 'ready' ? 'ready' : 'unknown';
     },
   },
-}).mount('#app');
+}).component('select-menu', SelectMenu).mount('#app');

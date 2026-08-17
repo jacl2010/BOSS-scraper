@@ -64,6 +64,7 @@ class ResumeConditions(BaseModel):
     experience: str
     degree: str
     salary: str
+    pages: int = Field(default=2, ge=1, le=10)
 
     @field_validator("city", mode="before")
     @classmethod

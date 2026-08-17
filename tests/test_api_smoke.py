@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 
 import fitz
 import httpx
@@ -18,6 +19,30 @@ from app.schemas import (
     ResumeProfile,
     ScoredJob,
 )
+
+
+def test_v_cloak_keeps_unmounted_vue_template_hidden():
+    css = (Path(__file__).parents[1] / "app" / "web" / "app.css").read_text(encoding="utf-8")
+
+    assert "#app[v-cloak] { display:none; }" in css
+
+
+def test_select_menu_constrains_its_popover_to_the_visible_viewport():
+    script = (Path(__file__).parents[1] / "app" / "web" / "app.js").read_text(encoding="utf-8")
+    css = (Path(__file__).parents[1] / "app" / "web" / "app.css").read_text(encoding="utf-8")
+
+    assert "syncPopoverPosition" in script
+    assert "open-upward" in script
+    assert ".select-menu.open-upward .select-popover" in css
+
+
+def test_match_page_new_active_tab_filters_to_just_active_jobs():
+    script = (Path(__file__).parents[1] / "app" / "web" / "app.js").read_text(encoding="utf-8")
+    template = (Path(__file__).parents[1] / "app" / "web" / "index.html").read_text(encoding="utf-8")
+
+    assert "newActiveResults()" in script
+    assert "this.jobActiveStatus(item) === '刚刚活跃'" in script
+    assert "{{ newActiveResults.length }}" in template
 
 
 def pdf_bytes(text: str) -> bytes:
@@ -70,6 +95,7 @@ class FakeBoss:
     def __init__(self) -> None:
         self.status_calls = 0
         self.collect_calls = 0
+        self.last_conditions = None
         self.jd_text = "Python FastAPI 后端开发"
         self.jobs = None
 
@@ -82,6 +108,7 @@ class FakeBoss:
 
     def collect(self, conditions):
         self.collect_calls += 1
+        self.last_conditions = conditions
         jobs = self.jobs or [
             CanonicalJob(
                 id="job-fixture",
@@ -113,6 +140,7 @@ class FakeBoss:
                 companies=[("示例公司", 1)],
                 skill_tags=[("Python", 1)],
                 jd_terms=[("FastAPI", 1)],
+                pages=conditions.pages,
                 formatted_summary="岗位市场摘要: Python @ 上海",
             ),
         )
@@ -266,6 +294,25 @@ def test_matches_require_a_nonempty_selected_resume_id(tmp_path, monkeypatch):
         response = client.post("/api/matches") if payload is None else client.post("/api/matches", json=payload)
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "validation_error"
+
+
+def test_monitor_pages_are_saved_and_used_for_collection(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOSS_MATCHER_LLM_API_KEY", "test-key")
+    database = Database(tmp_path / "app.db", tmp_path / "resumes")
+    llm, boss = FakeLlm(database), FakeBoss()
+    client = TestClient(create_app(database=database, llm=llm, boss=boss))
+    client.put("/api/llm-settings", json={"base_url": "https://example.test/v1", "model": "test-model"})
+    resume = client.post("/api/resumes", files={"file": ("resume.pdf", pdf_bytes("Python resume"), "application/pdf")}).json()
+    conditions = {"job_keyword": "Python", "city": "上海", "experience": "3-5年", "degree": "本科", "salary": "20-30K", "pages": 7}
+
+    saved = client.patch(f"/api/resumes/{resume['id']}", json={"conditions": conditions, "monitor_enabled": True})
+
+    assert saved.status_code == 200
+    assert saved.json()["conditions"]["pages"] == 7
+    assert client.post("/api/matches", json={"resume_id": resume["id"]}).status_code == 202
+    assert _wait_for_match(client)["status"] == "completed"
+    assert boss.last_conditions.pages == 7
+    assert client.get(f"/api/resumes/{resume['id']}/results").json()["collection_summary"]["pages"] == 7
 
 
 def test_same_job_is_scored_for_each_selected_resume_independently(tmp_path, monkeypatch):
