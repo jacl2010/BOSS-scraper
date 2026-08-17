@@ -181,7 +181,7 @@ def build_job_market_summary(
             "degree": conditions.degree,
             "salary": conditions.salary,
         },
-        pages=10,
+        pages=3,
         formatted_summary=format_summary(values),
     )
 
@@ -226,7 +226,7 @@ class BossAdapter:
             # fallback).  Do not pre-resolve it here or duplicate that logic.
             args = [
                 self.command, "--keyword", conditions.job_keyword, "--city", conditions.city,
-                "--pages", "10", "--detail", "--output", str(output),
+                "--pages", "3", "--detail", "--output", str(output),
                 "--detail-output", str(detail_output), "--format", "json",
             ]
             for flag, value in (

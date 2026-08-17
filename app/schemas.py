@@ -139,7 +139,7 @@ class JobMarketSummary(BaseModel):
     skill_tags: list[tuple[str, int]] = Field(default_factory=list)
     jd_terms: list[tuple[str, int]] = Field(default_factory=list)
     filters: dict[str, str] = Field(default_factory=dict)
-    pages: int = Field(default=10, ge=1, le=10)
+    pages: int = Field(default=3, ge=1, le=10)
     formatted_summary: str
 
 
