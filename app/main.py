@@ -156,6 +156,7 @@ def create_app(database: Database | None = None, llm=None, boss=None) -> FastAPI
             pools[row["pool"]].append({
                 "job_id": row["job_id"], "pool": row["pool"], "rank": row["rank"], "score": row["score"],
                 "title": row["title"], "company_name": row["company_name"], "job_url": row["job_url"],
+                "jd_text": row["jd_text"],
                 "city": row["city"], "experience": row["experience"], "degree": row["degree"], "salary": row["salary_text"],
                 "active_status": row["active_status_raw"],
                 "active_status_raw": row["active_status_raw"],

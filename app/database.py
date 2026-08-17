@@ -286,7 +286,7 @@ class Database:
     def get_results(self, resume_id: str) -> list[dict]:
         with self.transaction() as conn:
             rows = conn.execute(
-                """SELECT r.*, j.title, j.company_name, j.job_url, j.city, j.experience, j.degree, j.salary_text
+                """SELECT r.*, j.title, j.company_name, j.job_url, j.jd_text, j.city, j.experience, j.degree, j.salary_text
                 FROM match_results r JOIN jobs j ON j.id=r.job_id
                 WHERE r.resume_id=? ORDER BY r.pool, r.rank""", (resume_id,)
             ).fetchall()
