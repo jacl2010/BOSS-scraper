@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>BOSS 简历匹配器</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div id="app" v-cloak>
+    <aside class="rail">
+      <div class="brand">
+        <span class="brand-mark">BM</span>
+        <div><strong>BOSS 简历匹配器</strong><small>LOCAL SIGNAL DESK</small></div>
+      </div>
+      <nav aria-label="一级菜单">
+        <a v-for="item in navigation" :key="item.route" :href="'#' + item.route" :class="{ active: route === item.route }">
+          <span>{{ item.code }}</span>{{ item.label }}
+        </a>
+      </nav>
+      <div class="local-card">
+        <span class="status-dot"></span>
+        <div><strong>本地运行</strong><small>数据只留在这台电脑</small></div>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">{{ pageMeta.eyebrow }}</p>
+          <h1>{{ pageMeta.title }}</h1>
+          <p>{{ pageMeta.description }}</p>
+        </div>
+        <div class="task-chip" :data-state="matchStatus.status">
+          <span>{{ taskLabel }}</span>
+          <strong>{{ matchStatus.message || '等待人工操作' }}</strong>
+        </div>
+      </header>
+
+      <div v-if="notice.text" class="notice" :class="notice.type" role="status">
+        {{ notice.text }}
+        <button type="button" @click="notice.text = ''" aria-label="关闭提示">×</button>
+      </div>
+
+      <section v-if="route === '/llm'" class="content-grid narrow">
+        <article class="panel form-panel">
+          <div class="panel-head"><div><p class="kicker">连接设置</p><h2>大模型服务</h2></div><span class="badge" :class="llm.key_configured ? 'ok' : 'warn'">{{ llm.key_configured ? '环境变量已就绪' : '缺少环境变量' }}</span></div>
+          <label>服务地址<input v-model.trim="llmForm.base_url" type="url" placeholder="https://api.example.com/v1" autocomplete="off"></label>
+          <label>模型标识<input v-model.trim="llmForm.model" type="text" placeholder="deepseek-v4flash" autocomplete="off"></label>
+          <div class="secret-boundary">
+            <strong>API Key 不在页面填写</strong>
+            <p>启动前设置 <code>BOSS_MATCHER_LLM_API_KEY</code>。Key 不进入请求体、SQLite、页面或日志。</p>
+          </div>
+          <button class="primary" type="button" :disabled="busy.llm || !llmForm.base_url || !llmForm.model" @click="saveLlm">
+            {{ busy.llm ? '正在验证…' : '测试并保存' }}
+          </button>
+        </article>
+        <aside class="panel quiet-panel"><p class="kicker">当前状态</p><h2>{{ llm.tested_at ? '已通过连接测试' : '尚未验证' }}</h2><dl><dt>模型</dt><dd>{{ llm.model || '—' }}</dd><dt>最近测试</dt><dd>{{ formatTime(llm.tested_at) }}</dd></dl></aside>
+      </section>
+
+      <section v-if="route === '/resumes'" class="resume-layout">
+        <article class="panel resume-list-panel">
+          <div class="panel-head"><div><p class="kicker">文件柜</p><h2>简历 {{ resumes.length }}/10</h2></div><label class="upload-button" :class="{ disabled: resumes.length >= 10 || busy.upload }">选择 PDF<input type="file" accept="application/pdf,.pdf" multiple :disabled="resumes.length >= 10 || busy.upload" @change="uploadFiles"></label></div>
+          <p v-if="!resumes.length" class="empty">还没有简历。先配置大模型，再上传可提取文本的 PDF。</p>
+          <button v-for="resume in resumes" :key="resume.id" type="button" class="resume-row" :class="{ selected: selectedResumeId === resume.id }" @click="selectResume(resume.id)">
+            <span class="file-icon">PDF</span><span><strong>{{ resume.profile?.title || resume.filename }}</strong><small>{{ resume.filename }}</small></span><em :class="resume.status">{{ resumeStatusLabel(resume.status) }}</em>
+          </button>
+        </article>
+
+        <article class="panel resume-detail" v-if="selectedResume">
+          <div class="panel-head"><div><p class="kicker">候选人档案</p><h2>{{ selectedResume.profile?.title || selectedResume.filename }}</h2></div><button class="danger-link" type="button" @click="deleteResume">删除</button></div>
+          <div v-if="selectedResume.status === 'parse_failed'" class="inline-error"><p>{{ selectedResume.error_message }}</p><button type="button" @click="retryParse">重试解析</button></div>
+          <template v-if="selectedResume.profile">
+            <p class="summary">{{ selectedResume.profile.summary }}</p>
+            <div class="tag-list"><span v-for="tag in selectedResume.profile.tags" :key="tag">{{ tag }}</span></div>
+            <dl class="profile-grid"><dt>技能</dt><dd>{{ join(selectedResume.profile.skills) }}</dd><dt>工作年限</dt><dd>{{ selectedResume.profile.years_experience ?? '未知' }}</dd><dt>学历</dt><dd>{{ selectedResume.profile.education || '未知' }}</dd><dt>目标岗位</dt><dd>{{ join(selectedResume.profile.target_roles) }}</dd></dl>
+          </template>
+          <hr>
+          <div class="panel-head compact"><div><p class="kicker">监控条件</p><h3>为这份简历单独设置</h3></div><label class="switch"><input v-model="conditionForm.monitor_enabled" type="checkbox" :disabled="selectedResume.status !== 'ready'" @change="saveConditions"><span></span>参与匹配</label></div>
+          <div class="condition-grid">
+            <label>岗位关键词<input v-model.trim="conditionForm.job_keyword" placeholder="Python 后端"></label>
+            <label>城市<input v-model.trim="conditionForm.city" placeholder="上海"></label>
+            <label>工作经验<input v-model.trim="conditionForm.experience" placeholder="不限"></label>
+            <label>学历<input v-model.trim="conditionForm.degree" placeholder="不限"></label>
+            <label>薪资<input v-model.trim="conditionForm.salary" placeholder="不限"></label>
+          </div>
+          <button class="secondary" type="button" :disabled="busy.resume" @click="saveConditions">保存条件</button>
+        </article>
+        <article v-else class="panel empty-detail"><p>选择左侧简历查看解析结果和匹配条件。</p></article>
+      </section>
+
+      <section v-if="route === '/matches'" class="match-stack">
+        <article class="readiness-grid">
+          <div class="signal-card"><span>LLM</span><strong>{{ llm.tested_at && llm.key_configured ? '已就绪' : '待配置' }}</strong><small>{{ llm.model || '未设置模型' }}</small></div>
+          <div class="signal-card"><span>简历</span><strong>{{ eligibleResumes.length }} 份可参与</strong><small>解析成功、监控开启、条件完整</small></div>
+          <div class="signal-card"><span>BOSS</span><strong>{{ bossLabel }}</strong><small>{{ boss.message || '尚未检查环境' }}</small></div>
+          <div class="signal-actions"><button class="secondary" type="button" :disabled="busy.boss" @click="checkBoss">检查 BOSS 状态</button><button class="secondary" type="button" :disabled="busy.boss" @click="setupBoss">打开专用 Chrome</button><button class="primary" type="button" :disabled="!canStartMatch" @click="startMatch">开始匹配</button></div>
+        </article>
+
+        <article class="panel pipeline-panel">
+          <div class="panel-head"><div><p class="kicker">当前任务</p><h2>一次人工触发，一条清晰轨道</h2></div><span class="mono">{{ matchStatus.progress_current }}/{{ matchStatus.progress_total }}</span></div>
+          <ol class="pipeline">
+            <li v-for="stage in stages" :key="stage.key" :class="stageClass(stage.key)"><span>{{ stage.code }}</span><strong>{{ stage.label }}</strong></li>
+          </ol>
+          <p class="task-message">{{ matchStatus.message || '页面空闲时不会访问 BOSS，也不会调用岗位评分。' }}</p>
+        </article>
+
+        <article class="panel results-panel">
+          <div class="panel-head"><div><p class="kicker">最近结果</p><h2>按简历查看 Top 10</h2></div><select v-model="resultResumeId" @change="loadResults"><option value="">选择简历</option><option v-for="resume in resumes" :key="resume.id" :value="resume.id">{{ resume.profile?.title || resume.filename }}</option></select></div>
+          <div class="tabs"><button type="button" :class="{ active: resultTab === 'new_published' }" @click="resultTab = 'new_published'">新发布 / 本次新发现 {{ results.new_published.length }}/10</button><button type="button" :class="{ active: resultTab === 'new_active' }" @click="resultTab = 'new_active'">新活跃 {{ results.new_active.length }}/10</button></div>
+          <p v-if="!currentResults.length" class="empty">这个结果池暂时为空。完成一次匹配后再回来查看。</p>
+          <article v-for="item in currentResults" :key="item.job_id" class="job-card">
+            <div class="score"><strong>{{ item.score }}</strong><small>匹配分</small></div><div class="job-main"><div><span class="rank">#{{ item.rank }}</span><h3>{{ item.title }}</h3><small>{{ item.company_name || '公司未知' }} · {{ [item.city, item.experience, item.degree, item.salary].filter(Boolean).join(' · ') }}</small></div><p>{{ item.reason }}</p><div class="evidence"><span>优势：{{ join(item.strengths) }}</span><span>缺口：{{ join(item.gaps) }}</span></div></div><a :href="item.job_url" target="_blank" rel="noopener noreferrer">在 BOSS 查看 ↗</a>
+          </article>
+        </article>
+      </section>
+
+      <footer>仅供个人研究使用 · BOSS 平台未授权本工具 · 无 OCR · 无定时任务 · 不绕过验证码或访问限制</footer>
+    </main>
+  </div>
+  <script src="/vendor/vue.global.prod.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

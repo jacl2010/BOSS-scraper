@@ -1,0 +1,30 @@
+# Runtime data and user documents
+/data/
+*.pdf
+*.db
+*.sqlite
+*.sqlite3
+
+# Secrets and local configuration
+.env*
+
+# Python, test, and editor caches
+.venv/
+.uv-cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+coverage.xml
+.coverage
+htmlcov/
+
+# Logs and OS files
+*.log
+.DS_Store
+
+# Spec-kit and local agent metadata are working artifacts, not project deliverables.
+/.agents/
+/.specify/
+/specs/

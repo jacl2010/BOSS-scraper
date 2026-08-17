@@ -1,0 +1,34 @@
+[project]
+name = "boss-resume-matcher"
+version = "0.1.0"
+description = "本地简历与 BOSS 岗位匹配极简 MVP"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi==0.116.1",
+    "uvicorn==0.35.0",
+    "python-multipart==0.0.20",
+    "PyMuPDF==1.26.3",
+    "pydantic==2.11.7",
+    "langchain==0.3.27",
+    "langchain-openai==0.3.28",
+    "boss-zhipin-scraper @ git+https://github.com/eatmoreduck/boss-zhipin-scraper.git@2bc40f56a3ca3249ce3b98cdda0187e0bd612aa5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==8.4.1",
+    "httpx==0.28.1",
+    "ruff==0.12.7",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = [
+    "ignore:builtin type SwigPy.*:DeprecationWarning",
+    "ignore:builtin type swigvarlink.*:DeprecationWarning",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100

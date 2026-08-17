@@ -1,0 +1,28 @@
+[
+  {
+    "id": "new-job",
+    "title": "Python Backend Engineer",
+    "company_name": "Example Corp",
+    "job_url": "https://www.zhipin.com/job_detail/new-job.html",
+    "jd_text": "Python FastAPI SQL backend development",
+    "city": "上海",
+    "experience": "3-5年",
+    "degree": "本科",
+    "salary_text": "20-30K",
+    "active_status_raw": "刚刚活跃",
+    "published_at": null
+  },
+  {
+    "id": "filtered-city",
+    "title": "Python Backend Engineer",
+    "company_name": "Other Corp",
+    "job_url": "https://www.zhipin.com/job_detail/filtered-city.html",
+    "jd_text": "Python development",
+    "city": "北京",
+    "experience": "3-5年",
+    "degree": "本科",
+    "salary_text": "20-30K",
+    "active_status_raw": "今日活跃",
+    "published_at": null
+  }
+]
