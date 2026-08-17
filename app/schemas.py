@@ -13,7 +13,10 @@ class LlmSettingsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     base_url: str = Field(min_length=1)
     model: str = Field(min_length=1)
-    api_key: str | None = Field(default=None, min_length=1)
+    # The client intentionally submits an empty value when the masked key has
+    # not been changed.  Treat it as "keep the existing local key", rather
+    # than rejecting the complete settings update at request validation time.
+    api_key: str | None = None
     thinking_enabled: bool = True
     reasoning_effort: Literal["low", "high", "max"] = "low"
 

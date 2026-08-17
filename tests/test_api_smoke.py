@@ -35,7 +35,7 @@ class FakeLlm:
 
     def test_and_save(self, settings: LlmSettingsInput, api_key=None) -> LlmSettingsView:
         saved = self.database.save_llm_settings(settings)
-        return LlmSettingsView(**saved, key_configured=True, api_key_masked="sk-****cret")
+        return LlmSettingsView(**saved, key_configured=True, api_key_masked="***")
 
     def current_settings(self):
         settings = self.database.get_llm_settings()

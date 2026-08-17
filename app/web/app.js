@@ -17,7 +17,7 @@ createApp({
       matchStatus: { status: 'idle', stage: 'idle', progress_current: 0, progress_total: 0, message: '' },
       results: { new_published: [], new_active: [] }, resultTab: 'new_published',
       busy: { llm: false, upload: false, resume: false, boss: false },
-      notice: { type: 'info', text: '' }, pollTimer: null,
+      notice: { type: 'info', text: '' }, successDialog: { open: false, text: '' }, pollTimer: null,
       stages: [
         { key: 'checking', code: '01', label: '检查' }, { key: 'scraping', code: '02', label: '采集' },
         { key: 'filtering', code: '03', label: '过滤' }, { key: 'scoring', code: '04', label: '评分' },
@@ -61,6 +61,7 @@ createApp({
       else if (this.matchStatus.status === 'running') this.beginPolling();
     },
     flash(text, type = 'info') { this.notice = { text, type }; },
+    showSuccess(text = '已保存') { this.successDialog = { open: true, text }; },
     async loadLlm() { const data = await this.api('/api/llm-settings'); if (data) { this.llm = data; this.llmForm = { base_url: data.base_url, model: data.model, api_key: '', thinking_enabled: data.thinking_enabled, reasoning_effort: data.reasoning_effort }; } },
     async saveLlm() {
       this.busy.llm = true;
@@ -69,7 +70,7 @@ createApp({
         if (this.llmForm.api_key) payload.api_key = this.llmForm.api_key;
         this.llm = await this.api('/api/llm-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         this.llmForm.api_key = '';
-        this.flash('大模型连接已验证，Key 已保存到本机 .env。', 'success');
+        this.showSuccess('已保存');
       }
       catch (error) { this.flash(error.message, 'error'); } finally { this.busy.llm = false; }
     },
@@ -91,13 +92,13 @@ createApp({
     async saveConditions() {
       if (!this.selectedResume) return; this.busy.resume = true;
       const { monitor_enabled, ...conditions } = this.conditionForm;
-      try { const updated = await this.api(`/api/resumes/${this.selectedResume.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conditions, monitor_enabled }) }); this.replaceResume(updated); this.flash('简历条件已保存。', 'success'); }
+      try { const updated = await this.api(`/api/resumes/${this.selectedResume.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conditions, monitor_enabled }) }); this.replaceResume(updated); this.showSuccess('已保存'); }
       catch (error) { this.conditionForm.monitor_enabled = false; this.flash(error.message, 'error'); } finally { this.busy.resume = false; }
     },
     async retryParse() { try { this.replaceResume(await this.api(`/api/resumes/${this.selectedResume.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ retry_parse: true }) })); } catch (error) { this.flash(error.message, 'error'); } },
     async deleteResume() {
       if (!this.selectedResume || !confirm(`删除 ${this.selectedResume.filename}？此操作无法恢复。`)) return;
-      try { await this.api(`/api/resumes/${this.selectedResume.id}`, { method: 'DELETE' }); this.resumes = this.resumes.filter((item) => item.id !== this.selectedResumeId); this.selectedResumeId = ''; if (this.resumes.length) this.selectResume(this.resumes[0].id); this.flash('简历已删除。', 'success'); } catch (error) { this.flash(error.message, 'error'); }
+      try { await this.api(`/api/resumes/${this.selectedResume.id}`, { method: 'DELETE' }); this.resumes = this.resumes.filter((item) => item.id !== this.selectedResumeId); this.selectedResumeId = ''; if (this.resumes.length) this.selectResume(this.resumes[0].id); this.showSuccess('简历已删除'); } catch (error) { this.flash(error.message, 'error'); }
     },
     replaceResume(updated) { const index = this.resumes.findIndex((item) => item.id === updated.id); if (index >= 0) this.resumes.splice(index, 1, updated); this.selectResume(updated.id); },
     async checkBoss() { this.busy.boss = true; try { this.boss = await this.api('/api/boss/status'); } catch (error) { this.flash(error.message, 'error'); } finally { this.busy.boss = false; } },

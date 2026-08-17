@@ -59,7 +59,7 @@ class LlmService:
     def mask_key(key: str | None) -> str:
         if not key:
             return ""
-        return f"{key[:3]}****{key[-4:]}" if len(key) > 7 else "****"
+        return "***"
 
     def _client(self, settings: LlmSettingsInput | dict, api_key: str | None = None) -> ChatOpenAI:
         base_url = settings["base_url"] if isinstance(settings, dict) else settings.base_url
@@ -75,9 +75,13 @@ class LlmService:
         )
 
     def test_and_save(self, settings: LlmSettingsInput, api_key: str | None = None) -> LlmSettingsView:
-        candidate = self._api_key(api_key)
+        # A blank API key means the UI is keeping the existing masked key.  It
+        # must use the key already held in the local environment and never
+        # rewrite the .env file with an empty value.
+        new_api_key = api_key.strip() if api_key is not None else None
+        candidate = self._api_key(new_api_key or None)
         self.test_settings(settings, candidate)
-        if api_key is not None:
+        if new_api_key:
             self._write_env_key(candidate)
             os.environ[self.ENV_NAME] = candidate
         saved = self.database.save_llm_settings(settings)

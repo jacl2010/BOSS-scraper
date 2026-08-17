@@ -298,7 +298,7 @@ def test_llm_key_is_written_to_local_env_only_after_success(database, tmp_path, 
 
     assert env_path.read_text(encoding="utf-8") == "BOSS_MATCHER_LLM_API_KEY=sk-test-secret\n"
     assert result.key_configured is True
-    assert result.api_key_masked == "sk-****cret"
+    assert result.api_key_masked == "***"
     assert "sk-test-secret" not in result.model_dump_json()
     assert "sk-test-secret" not in repr(database.get_llm_settings())
 
@@ -316,6 +316,28 @@ def test_failed_llm_key_test_does_not_overwrite_existing_env(database, tmp_path,
         )
 
     assert env_path.read_text(encoding="utf-8") == "BOSS_MATCHER_LLM_API_KEY=old-secret\n"
+
+
+@pytest.mark.parametrize("api_key", [None, "", "   "])
+def test_unchanged_llm_key_reuses_existing_env_without_rewriting(database, tmp_path, monkeypatch, api_key):
+    env_path = tmp_path / ".env"
+    env_path.write_text("BOSS_MATCHER_LLM_API_KEY=old-secret\nOTHER_SETTING=keep\n", encoding="utf-8")
+    monkeypatch.delenv("BOSS_MATCHER_LLM_API_KEY", raising=False)
+    llm = LlmService(database, env_path=env_path)
+    tested_keys = []
+    monkeypatch.setattr(llm, "test_settings", lambda settings, candidate=None: tested_keys.append(candidate) or True)
+
+    result = llm.test_and_save(
+        LlmSettingsInput(base_url="https://example.test/v1", model="updated-model"),
+        api_key=api_key,
+    )
+
+    assert tested_keys == ["old-secret"]
+    assert env_path.read_text(encoding="utf-8") == "BOSS_MATCHER_LLM_API_KEY=old-secret\nOTHER_SETTING=keep\n"
+    assert result.api_key_masked == "***"
+    assert result.model == "updated-model"
+    assert "old-secret" not in result.model_dump_json()
+    assert "old-secret" not in repr(database.get_llm_settings())
 
 
 def test_llm_key_rejects_newline(database, tmp_path):
@@ -344,9 +366,53 @@ def test_api_llm_settings_writes_key_to_env_and_returns_mask(tmp_path, monkeypat
     )
 
     assert response.status_code == 200
-    assert response.json()["api_key_masked"] == "sk-****cret"
+    assert response.json()["api_key_masked"] == "***"
     assert "sk-api-secret" not in response.text
     assert (tmp_path / ".env").read_text(encoding="utf-8") == "BOSS_MATCHER_LLM_API_KEY=sk-api-secret\n"
+
+
+def test_api_llm_settings_get_returns_only_masked_existing_key(tmp_path, monkeypatch):
+    database = Database(tmp_path / "app.db", tmp_path / "resumes")
+    env_path = tmp_path / ".env"
+    env_path.write_text("BOSS_MATCHER_LLM_API_KEY=sk-existing-secret\n", encoding="utf-8")
+    monkeypatch.delenv("BOSS_MATCHER_LLM_API_KEY", raising=False)
+    llm = LlmService(database, env_path=env_path)
+    monkeypatch.setattr(llm, "test_settings", lambda settings, api_key=None: True)
+    client = TestClient(create_app(database=database, llm=llm))
+    client.put(
+        "/api/llm-settings",
+        json={"base_url": "https://example.test/v1", "model": "test"},
+    )
+
+    response = client.get("/api/llm-settings")
+
+    assert response.status_code == 200
+    assert response.json()["key_configured"] is True
+    assert response.json()["api_key_masked"] == "***"
+    assert "sk-existing-secret" not in response.text
+    assert "api_key" not in response.json()
+
+
+def test_api_llm_settings_blank_key_reuses_existing_key(tmp_path, monkeypatch):
+    database = Database(tmp_path / "app.db", tmp_path / "resumes")
+    env_path = tmp_path / ".env"
+    env_path.write_text("BOSS_MATCHER_LLM_API_KEY=sk-existing-secret\n", encoding="utf-8")
+    monkeypatch.delenv("BOSS_MATCHER_LLM_API_KEY", raising=False)
+    llm = LlmService(database, env_path=env_path)
+    tested_keys = []
+    monkeypatch.setattr(llm, "test_settings", lambda settings, api_key=None: tested_keys.append(api_key) or True)
+    client = TestClient(create_app(database=database, llm=llm))
+
+    response = client.put(
+        "/api/llm-settings",
+        json={"base_url": "https://example.test/v1", "model": "changed", "api_key": "  "},
+    )
+
+    assert response.status_code == 200
+    assert tested_keys == ["sk-existing-secret"]
+    assert env_path.read_text(encoding="utf-8") == "BOSS_MATCHER_LLM_API_KEY=sk-existing-secret\n"
+    assert response.json()["api_key_masked"] == "***"
+    assert "sk-existing-secret" not in response.text
 
 
 def test_llm_rejects_remote_plain_http_but_allows_loopback():
