@@ -76,8 +76,6 @@ class ResumeConditions(BaseModel):
 
 class ResumePatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    conditions: ResumeConditions | None = None
-    monitor_enabled: bool | None = None
     retry_parse: bool | None = None
 
 
@@ -87,9 +85,12 @@ class ResumeView(BaseModel):
     status: Literal["parsing", "ready", "parse_failed"]
     error_message: str | None = None
     profile: ResumeProfile | None = None
-    conditions: ResumeConditions | None = None
-    monitor_enabled: bool
     created_at: datetime
+
+
+class MonitorSettingsView(BaseModel):
+    conditions: ResumeConditions
+    updated_at: datetime
 
 
 class BossStatus(BaseModel):
@@ -101,11 +102,12 @@ class BossStatus(BaseModel):
 
 class MatchStatus(BaseModel):
     status: Literal["idle", "running", "completed", "failed"] = "idle"
+    task: Literal["monitor", "match"] = "monitor"
     stage: Literal["idle", "checking", "scraping", "filtering", "scoring", "finalizing", "completed", "failed"] = "idle"
     current_resume_id: str | None = None
     progress_current: int = 0
     progress_total: int = 0
-    message: str = "等待手动开始匹配"
+    message: str = "等待手动执行"
 
 
 class MatchStartRequest(BaseModel):

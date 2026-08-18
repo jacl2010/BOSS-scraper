@@ -95,7 +95,6 @@ macOS 可以直接双击 `start.command`，也可以在终端执行：
 ```bash
 ./start.command
 ```
-```
 
 ## 使用流程
 
@@ -105,6 +104,9 @@ macOS 可以直接双击 `start.command`，也可以在终端执行：
 
 - 页面保存的新 Key 会写入项目根目录 `.env` 中的 `BOSS_MATCHER_LLM_API_KEY`；
 - 也可以在启动前通过环境变量提供 Key：
+
+```bash
+export BOSS_MATCHER_LLM_API_KEY="your-api-key"
 ```
 
 ### 2. 上传并配置简历

@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import uuid
 from pathlib import Path
 
 import fitz
 
 from app.database import Database, utc_now
-from app.schemas import ResumeConditions, ResumePatch, ResumeProfile, ResumeView
+from app.schemas import ResumePatch, ResumeProfile, ResumeView
 
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
@@ -101,22 +100,10 @@ class ResumeService:
         return [self._to_view(row) for row in self.database.list_resume_rows()]
 
     def update(self, resume_id: str, patch: ResumePatch) -> ResumeView:
-        row = self._require_row(resume_id)
+        self._require_row(resume_id)
         if patch.retry_parse:
             return self.retry_parse(resume_id)
-        conditions = patch.conditions
-        values: dict = {}
-        if conditions is not None:
-            values["conditions_json"] = conditions.model_dump_json()
-        current_conditions = conditions or self._conditions(row)
-        if patch.monitor_enabled is not None:
-            if patch.monitor_enabled and (row["status"] != "ready" or current_conditions is None):
-                raise ResumeError("解析成功且条件完整后才能开启监控")
-            values["monitor_enabled"] = int(patch.monitor_enabled)
-        if not values:
-            raise ResumeError("请提供可更新字段")
-        self.database.update_resume(resume_id, **values)
-        return self.get(resume_id)
+        raise ResumeError("请提供可更新字段")
 
     def delete(self, resume_id: str) -> None:
         row = self.database.delete_resume(resume_id)
@@ -128,23 +115,14 @@ class ResumeService:
             pass
 
     def eligible(self) -> list[dict]:
-        return [
-            row for row in self.database.list_resume_rows()
-            if row["status"] == "ready" and bool(row["monitor_enabled"]) and self._conditions(row) is not None
-        ]
-
-    @staticmethod
-    def _conditions(row: dict) -> ResumeConditions | None:
-        value = json.loads(row["conditions_json"] or "{}")
-        return ResumeConditions(**value) if value else None
+        return [row for row in self.database.list_resume_rows() if row["status"] == "ready"]
 
     @staticmethod
     def _to_view(row: dict) -> ResumeView:
         profile = ResumeProfile.model_validate_json(row["profile_json"]) if row["profile_json"] else None
         return ResumeView(
             id=row["id"], filename=row["filename"], status=row["status"], error_message=row["error_message"],
-            profile=profile, conditions=ResumeService._conditions(row), monitor_enabled=bool(row["monitor_enabled"]),
-            created_at=row["created_at"],
+            profile=profile, created_at=row["created_at"],
         )
 
     def _require_row(self, resume_id: str) -> dict:

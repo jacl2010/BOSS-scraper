@@ -45,6 +45,17 @@ def test_match_page_new_active_tab_filters_to_just_active_jobs():
     assert "{{ newActiveResults.length }}" in template
 
 
+def test_match_page_splits_monitor_and_match_signal_tracks():
+    script = (Path(__file__).parents[1] / "app" / "web" / "app.js").read_text(encoding="utf-8")
+    template = (Path(__file__).parents[1] / "app" / "web" / "index.html").read_text(encoding="utf-8")
+
+    assert "monitorStages" in script and "matchStages" in script
+    assert "startMonitor" in script and "saveMonitorConditions" in script
+    assert "{{ matchStatus.task }}" not in template
+    assert "执行监控" in template
+    assert "conditionForm" not in script
+
+
 def pdf_bytes(text: str) -> bytes:
     document = fitz.open()
     page = document.new_page()
@@ -213,30 +224,11 @@ def test_fake_api_core_loop_is_isolated_and_idle_has_zero_external_calls(tmp_pat
     assert first.status_code == second.status_code == 201
     assert first.json()["id"] != second.json()["id"]
 
-    conditions = {
-        "job_keyword": "Python",
-        "city": "上海",
-        "experience": "3-5年",
-        "degree": "本科",
-        "salary": "20-30K",
-    }
-    assert client.patch(
-        f"/api/resumes/{first.json()['id']}",
-        json={"conditions": conditions, "monitor_enabled": True},
-    ).status_code == 200
-    assert client.patch(
-        f"/api/resumes/{second.json()['id']}",
-        json={"conditions": conditions, "monitor_enabled": False},
-    ).status_code == 200
+    assert client.get("/api/monitor-settings").json() is None
+    _save_monitor_conditions(client)
+    _run_monitor(client)
 
-    started = client.post("/api/matches", json={"resume_id": first.json()["id"]})
-    assert started.status_code == 202
-    for _ in range(100):
-        status = client.get("/api/matches/status").json()
-        if status["status"] != "running":
-            break
-        time.sleep(0.01)
-    assert status["status"] == "completed"
+    _run_match(client, first.json()["id"])
     assert boss.collect_calls == 1
     assert llm.score_calls == 1
 
@@ -261,24 +253,53 @@ def _wait_for_match(client: TestClient) -> dict:
     return status
 
 
+CONDITIONS = {
+    "job_keyword": "Python",
+    "city": "上海",
+    "experience": "3-5年",
+    "degree": "本科",
+    "salary": "20-30K",
+}
+
+
+def _save_monitor_conditions(client: TestClient, **overrides) -> dict:
+    payload = {**CONDITIONS, **overrides}
+    response = client.put("/api/monitor-settings", json=payload)
+    assert response.status_code == 200
+    return response.json()
+
+
+def _run_monitor(client: TestClient) -> dict:
+    assert client.post("/api/monitor").status_code == 202
+    status = _wait_for_match(client)
+    assert status["status"] == "completed", status
+    return status
+
+
+def _run_match(client: TestClient, resume_id: str) -> dict:
+    assert client.post("/api/matches", json={"resume_id": resume_id}).status_code == 202
+    status = _wait_for_match(client)
+    assert status["status"] == "completed", status
+    return status
+
+
 def test_selected_resume_is_the_only_resume_processed(tmp_path, monkeypatch):
     monkeypatch.setenv("BOSS_MATCHER_LLM_API_KEY", "test-key")
     database = Database(tmp_path / "app.db", tmp_path / "resumes")
     llm, boss = FakeLlm(database), FakeBoss()
     client = TestClient(create_app(database=database, llm=llm, boss=boss))
     client.put("/api/llm-settings", json={"base_url": "https://example.test/v1", "model": "test-model"})
-    conditions = {"job_keyword": "Python", "city": "上海", "experience": "3-5年", "degree": "本科", "salary": "20-30K"}
     first = client.post("/api/resumes", files={"file": ("first.pdf", pdf_bytes("Python first"), "application/pdf")}).json()
     second = client.post("/api/resumes", files={"file": ("second.pdf", pdf_bytes("Python second"), "application/pdf")}).json()
-    for resume in (first, second):
-        assert client.patch(f"/api/resumes/{resume['id']}", json={"conditions": conditions, "monitor_enabled": True}).status_code == 200
+    _save_monitor_conditions(client)
+    _run_monitor(client)
 
     assert client.post("/api/matches", json={"resume_id": second["id"]}).status_code == 202
     status = _wait_for_match(client)
 
     assert status["status"] == "completed"
     assert status["current_resume_id"] == second["id"]
-    assert boss.collect_calls == llm.score_calls == 1
+    assert boss.collect_calls == 1 and llm.score_calls == 1
     assert client.get(f"/api/resumes/{first['id']}/results").json()["new_published"] == []
 
 
@@ -288,8 +309,8 @@ def test_matches_require_a_nonempty_selected_resume_id(tmp_path, monkeypatch):
     client = TestClient(create_app(database=database, llm=FakeLlm(database), boss=FakeBoss()))
     client.put("/api/llm-settings", json={"base_url": "https://example.test/v1", "model": "test-model"})
     resume = client.post("/api/resumes", files={"file": ("resume.pdf", pdf_bytes("Python resume"), "application/pdf")}).json()
-    conditions = {"job_keyword": "Python", "city": "上海", "experience": "3-5年", "degree": "本科", "salary": "20-30K"}
-    client.patch(f"/api/resumes/{resume['id']}", json={"conditions": conditions, "monitor_enabled": True})
+    _save_monitor_conditions(client)
+    _run_monitor(client)
 
     for payload in (None, {}, {"resume_id": ""}, {"resume_id": "   "}):
         response = client.post("/api/matches") if payload is None else client.post("/api/matches", json=payload)
@@ -304,14 +325,12 @@ def test_monitor_pages_are_saved_and_used_for_collection(tmp_path, monkeypatch):
     client = TestClient(create_app(database=database, llm=llm, boss=boss))
     client.put("/api/llm-settings", json={"base_url": "https://example.test/v1", "model": "test-model"})
     resume = client.post("/api/resumes", files={"file": ("resume.pdf", pdf_bytes("Python resume"), "application/pdf")}).json()
-    conditions = {"job_keyword": "Python", "city": "上海", "experience": "3-5年", "degree": "本科", "salary": "20-30K", "pages": 7}
 
-    saved = client.patch(f"/api/resumes/{resume['id']}", json={"conditions": conditions, "monitor_enabled": True})
+    saved = _save_monitor_conditions(client, pages=7)
 
-    assert saved.status_code == 200
-    assert saved.json()["conditions"]["pages"] == 7
-    assert client.post("/api/matches", json={"resume_id": resume["id"]}).status_code == 202
-    assert _wait_for_match(client)["status"] == "completed"
+    assert saved["conditions"]["pages"] == 7
+    _run_monitor(client)
+    _run_match(client, resume["id"])
     assert boss.last_conditions.pages == 7
     assert client.get(f"/api/resumes/{resume['id']}/results").json()["collection_summary"]["pages"] == 7
 
@@ -322,13 +341,12 @@ def test_same_job_is_scored_for_each_selected_resume_independently(tmp_path, mon
     llm, boss = FakeLlm(database), FakeBoss()
     client = TestClient(create_app(database=database, llm=llm, boss=boss))
     client.put("/api/llm-settings", json={"base_url": "https://example.test/v1", "model": "test-model"})
-    conditions = {"job_keyword": "Python", "city": "上海", "experience": "3-5年", "degree": "本科", "salary": "20-30K"}
     first = client.post("/api/resumes", files={"file": ("first.pdf", pdf_bytes("Python first"), "application/pdf")}).json()
     second = client.post("/api/resumes", files={"file": ("second.pdf", pdf_bytes("Python second"), "application/pdf")}).json()
+    _save_monitor_conditions(client)
+    _run_monitor(client)
     for resume in (first, second):
-        client.patch(f"/api/resumes/{resume['id']}", json={"conditions": conditions, "monitor_enabled": True})
-        assert client.post("/api/matches", json={"resume_id": resume["id"]}).status_code == 202
-        assert _wait_for_match(client)["status"] == "completed"
+        _run_match(client, resume["id"])
 
     assert llm.score_calls == 2
     assert client.get(f"/api/resumes/{first['id']}/results").json()["new_published"][0]["job_id"] == "job-fixture"
@@ -342,16 +360,19 @@ def test_changed_collected_job_is_scored_again_and_result_exposes_raw_active_sta
     client = TestClient(create_app(database=database, llm=llm, boss=boss))
     client.put("/api/llm-settings", json={"base_url": "https://example.test/v1", "model": "test-model"})
     resume = client.post("/api/resumes", files={"file": ("resume.pdf", pdf_bytes("Python resume"), "application/pdf")}).json()
-    conditions = {"job_keyword": "Python", "city": "上海", "experience": "3-5年", "degree": "本科", "salary": "20-30K"}
-    client.patch(f"/api/resumes/{resume['id']}", json={"conditions": conditions, "monitor_enabled": True})
+    _save_monitor_conditions(client)
+    _run_monitor(client)
+    _run_match(client, resume["id"])
+    assert llm.score_calls == 1
 
-    for expected_calls in (1, 1):
-        assert client.post("/api/matches", json={"resume_id": resume["id"]}).status_code == 202
-        assert _wait_for_match(client)["status"] == "completed"
-        assert llm.score_calls == expected_calls
+    # 不执行监控时，重复匹配不重复评分
+    _run_match(client, resume["id"])
+    assert llm.score_calls == 1
+
+    # 职位内容变化后重新监控、匹配，才重新评分
     boss.jd_text = "Python FastAPI 后端开发，负责分布式任务调度"
-    assert client.post("/api/matches", json={"resume_id": resume["id"]}).status_code == 202
-    assert _wait_for_match(client)["status"] == "completed"
+    _run_monitor(client)
+    _run_match(client, resume["id"])
 
     response = client.get(f"/api/resumes/{resume['id']}/results").json()
     results = response["new_published"]
@@ -379,10 +400,9 @@ def test_second_llm_batch_failure_marks_run_failed_and_keeps_previous_results(tm
     client = TestClient(create_app(database=database, llm=llm, boss=boss))
     client.put("/api/llm-settings", json={"base_url": "https://example.test/v1", "model": "test-model"})
     resume = client.post("/api/resumes", files={"file": ("resume.pdf", pdf_bytes("Python resume"), "application/pdf")}).json()
-    conditions = {"job_keyword": "Python", "city": "上海", "experience": "3-5年", "degree": "本科", "salary": "20-30K"}
-    client.patch(f"/api/resumes/{resume['id']}", json={"conditions": conditions, "monitor_enabled": True})
-    assert client.post("/api/matches", json={"resume_id": resume["id"]}).status_code == 202
-    assert _wait_for_match(client)["status"] == "completed"
+    _save_monitor_conditions(client)
+    _run_monitor(client)
+    _run_match(client, resume["id"])
     previous = client.get(f"/api/resumes/{resume['id']}/results").json()
 
     boss.jobs = [
@@ -393,6 +413,7 @@ def test_second_llm_batch_failure_marks_run_failed_and_keeps_previous_results(tm
             active_status_raw="刚刚活跃", active_bucket="active",
         ) for number in range(11)
     ]
+    _run_monitor(client)
     llm.fail_on_call = llm.score_calls + 2
     assert client.post("/api/matches", json={"resume_id": resume["id"]}).status_code == 202
     status = _wait_for_match(client)
@@ -410,10 +431,9 @@ def test_result_keeps_active_status_snapshot_after_global_job_changes(tmp_path, 
     client = TestClient(create_app(database=database, llm=llm, boss=boss))
     client.put("/api/llm-settings", json={"base_url": "https://example.test/v1", "model": "test-model"})
     resume = client.post("/api/resumes", files={"file": ("resume.pdf", pdf_bytes("Python resume"), "application/pdf")}).json()
-    conditions = {"job_keyword": "Python", "city": "上海", "experience": "3-5年", "degree": "本科", "salary": "20-30K"}
-    client.patch(f"/api/resumes/{resume['id']}", json={"conditions": conditions, "monitor_enabled": True})
-    assert client.post("/api/matches", json={"resume_id": resume["id"]}).status_code == 202
-    assert _wait_for_match(client)["status"] == "completed"
+    _save_monitor_conditions(client)
+    _run_monitor(client)
+    _run_match(client, resume["id"])
 
     database.upsert_job(CanonicalJob(
         id="job-fixture", title="Python 工程师", company_name="示例公司",

@@ -25,7 +25,7 @@ from app.database import Database
 from app.llm import LlmService
 from app.matching import MatchRunner
 from app.resumes import ResumeError, ResumeService
-from app.schemas import LlmSettingsInput, LlmSettingsView, MatchStartRequest, ResumePatch
+from app.schemas import LlmSettingsInput, LlmSettingsView, MatchStartRequest, MonitorSettingsView, ResumeConditions, ResumePatch
 
 
 def _error(status: int, message: str, code: str = "invalid_request") -> HTTPException:
@@ -131,12 +131,30 @@ def create_app(database: Database | None = None, llm=None, boss=None) -> FastAPI
     def boss_setup():
         return boss.setup()
 
+    @app.get("/api/monitor-settings")
+    def get_monitor_settings():
+        settings = database.get_monitor_settings()
+        return MonitorSettingsView(**settings) if settings else None
+
+    @app.put("/api/monitor-settings")
+    def put_monitor_settings(payload: ResumeConditions):
+        return MonitorSettingsView(**database.save_monitor_settings(payload))
+
+    @app.post("/api/monitor", status_code=202)
+    def start_monitor():
+        try:
+            return runner.start_monitor()
+        except RuntimeError as exc:
+            raise _error(409, str(exc), "task_running") from exc
+        except ValueError as exc:
+            raise _error(422, str(exc), "monitor_not_ready") from exc
+
     @app.post("/api/matches", status_code=202)
     def start_matches(payload: MatchStartRequest):
         try:
-            return runner.start(payload.resume_id)
+            return runner.start_match(payload.resume_id)
         except RuntimeError as exc:
-            raise _error(409, str(exc), "match_running") from exc
+            raise _error(409, str(exc), "task_running") from exc
         except ValueError as exc:
             raise _error(422, str(exc), "no_eligible_resume") from exc
 
@@ -149,12 +167,14 @@ def create_app(database: Database | None = None, llm=None, boss=None) -> FastAPI
         if database.get_resume_row(resume_id) is None:
             raise _error(404, "简历不存在", "resume_not_found")
         rows = database.get_results(resume_id)
-        collection_summary = database.get_collection_summary(resume_id)
+        collection_summary = database.get_collection_summary()
         last_completed_at = database.get_match_completion(resume_id)
-        pools = {"new_published": [], "new_active": []}
+        pools: dict[str, list] = {"new_published": [], "new_active": []}
+        ranks = {"new_published": 0, "new_active": 0}
         for row in rows:
+            ranks[row["pool"]] += 1
             pools[row["pool"]].append({
-                "job_id": row["job_id"], "pool": row["pool"], "rank": row["rank"], "score": row["score"],
+                "job_id": row["job_id"], "pool": row["pool"], "rank": ranks[row["pool"]], "score": row["score"],
                 "title": row["title"], "company_name": row["company_name"], "job_url": row["job_url"],
                 "jd_text": row["jd_text"],
                 "city": row["city"], "experience": row["experience"], "degree": row["degree"], "salary": row["salary_text"],
@@ -171,12 +191,6 @@ def create_app(database: Database | None = None, llm=None, boss=None) -> FastAPI
             "collection_summary": collection_summary,
             **pools,
         }
-
-    @app.get("/api/resumes/{resume_id}/collection-summary")
-    def resume_collection_summary(resume_id: str):
-        if database.get_resume_row(resume_id) is None:
-            raise _error(404, "简历不存在", "resume_not_found")
-        return {"resume_id": resume_id, "collection_summary": database.get_collection_summary(resume_id)}
 
     web_dir = Path(__file__).parent / "web"
     if web_dir.is_dir():

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterator
 
-from app.schemas import CanonicalJob, JobMarketSummary, LlmSettingsInput, MatchResult
+from app.schemas import CanonicalJob, JobMarketSummary, LlmSettingsInput, MatchResult, ResumeConditions
 
 
 def utc_now() -> str:
@@ -93,6 +93,14 @@ class Database:
                     resume_id TEXT PRIMARY KEY REFERENCES resumes(id) ON DELETE CASCADE,
                     summary_json TEXT NOT NULL, collected_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS monitor_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    conditions_json TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS monitor_summaries (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    summary_json TEXT NOT NULL, collected_at TEXT NOT NULL
+                );
                 """
             )
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(llm_settings)")}
@@ -141,6 +149,25 @@ class Database:
             "thinking_enabled": settings.thinking_enabled,
             "reasoning_effort": settings.reasoning_effort,
         }
+
+    def get_monitor_settings(self) -> dict | None:
+        with self.transaction() as conn:
+            row = conn.execute("SELECT conditions_json, updated_at FROM monitor_settings WHERE id = 1").fetchone()
+        if not row:
+            return None
+        conditions = ResumeConditions.model_validate_json(row["conditions_json"])
+        return {"conditions": conditions, "updated_at": row["updated_at"]}
+
+    def save_monitor_settings(self, conditions: ResumeConditions) -> dict:
+        now = utc_now()
+        with self.transaction() as conn:
+            conn.execute(
+                """INSERT INTO monitor_settings(id, conditions_json, updated_at) VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET conditions_json=excluded.conditions_json,
+                updated_at=excluded.updated_at""",
+                (conditions.model_dump_json(), now),
+            )
+        return {"conditions": conditions, "updated_at": now}
 
     def count_resumes(self) -> int:
         with self.transaction() as conn:
@@ -237,6 +264,20 @@ class Database:
         encoded = json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
+    def list_jobs(self) -> list[CanonicalJob]:
+        with self.transaction() as conn:
+            rows = conn.execute("SELECT * FROM jobs ORDER BY first_seen_at DESC").fetchall()
+        return [
+            CanonicalJob(
+                id=row["id"], title=row["title"], company_name=row["company_name"], job_url=row["job_url"],
+                jd_text=row["jd_text"], city=row["city"], experience=row["experience"], degree=row["degree"],
+                salary_text=row["salary_text"], salary_min_k=row["salary_min_k"], salary_max_k=row["salary_max_k"],
+                active_status_raw=row["active_status_raw"], active_bucket=row["active_bucket"],
+                published_at=row["published_at"],
+            )
+            for row in rows
+        ]
+
     def get_resume_job_states(self, resume_id: str, job_ids: list[str]) -> dict[str, dict]:
         if not job_ids:
             return {}
@@ -250,15 +291,17 @@ class Database:
         return {row["job_id"]: dict(row) for row in rows}
 
     def save_completed_match(self, resume_id: str, results: list[MatchResult], observed_jobs: list[CanonicalJob]) -> str:
-        """Atomically save results, per-resume job baselines, and completion time."""
+        """Atomically upsert this round's scores, per-resume job baselines, and completion time."""
 
         matched_at = utc_now()
         with self.transaction() as conn:
-            conn.execute("DELETE FROM match_results WHERE resume_id = ?", (resume_id,))
             conn.executemany(
                 """INSERT INTO match_results(
                 resume_id, job_id, pool, score, reason, strengths_json, gaps_json, rank, active_status_raw, matched_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(resume_id, job_id) DO UPDATE SET pool=excluded.pool, score=excluded.score,
+                reason=excluded.reason, strengths_json=excluded.strengths_json, gaps_json=excluded.gaps_json,
+                rank=excluded.rank, active_status_raw=excluded.active_status_raw, matched_at=excluded.matched_at""",
                 [
                     (resume_id, item.job_id, item.pool, item.score, item.reason, json.dumps(item.strengths, ensure_ascii=False),
                      json.dumps(item.gaps, ensure_ascii=False), item.rank, item.active_status, matched_at)
@@ -288,7 +331,7 @@ class Database:
             rows = conn.execute(
                 """SELECT r.*, j.title, j.company_name, j.job_url, j.jd_text, j.city, j.experience, j.degree, j.salary_text
                 FROM match_results r JOIN jobs j ON j.id=r.job_id
-                WHERE r.resume_id=? ORDER BY r.pool, r.rank""", (resume_id,)
+                WHERE r.resume_id=? ORDER BY r.pool, r.score DESC, r.job_id""", (resume_id,)
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -299,21 +342,18 @@ class Database:
             ).fetchone()
         return str(row["last_completed_at"]) if row else None
 
-    def save_collection_summary(self, resume_id: str, summary: JobMarketSummary) -> None:
+    def save_collection_summary(self, summary: JobMarketSummary) -> None:
         with self.transaction() as conn:
             conn.execute(
-                """INSERT INTO collection_summaries(resume_id, summary_json, collected_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(resume_id) DO UPDATE SET summary_json=excluded.summary_json,
+                """INSERT INTO monitor_summaries(id, summary_json, collected_at) VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET summary_json=excluded.summary_json,
                 collected_at=excluded.collected_at""",
-                (resume_id, summary.model_dump_json(), utc_now()),
+                (summary.model_dump_json(), utc_now()),
             )
 
-    def get_collection_summary(self, resume_id: str) -> dict | None:
+    def get_collection_summary(self) -> dict | None:
         with self.transaction() as conn:
-            row = conn.execute(
-                "SELECT summary_json, collected_at FROM collection_summaries WHERE resume_id = ?", (resume_id,)
-            ).fetchone()
+            row = conn.execute("SELECT summary_json, collected_at FROM monitor_summaries WHERE id = 1").fetchone()
         if row is None:
             return None
         summary = JobMarketSummary.model_validate_json(row["summary_json"])

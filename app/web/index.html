@@ -84,41 +84,48 @@
             <div class="tag-list"><span v-for="tag in selectedResume.profile.tags" :key="tag">{{ tag }}</span></div>
             <dl class="profile-grid"><dt>技能</dt><dd>{{ join(selectedResume.profile.skills) }}</dd><dt>工作年限</dt><dd>{{ selectedResume.profile.years_experience ?? '未知' }}</dd><dt>学历</dt><dd>{{ selectedResume.profile.education || '未知' }}</dd><dt>目标岗位</dt><dd>{{ join(selectedResume.profile.target_roles) }}</dd></dl>
           </template>
-          <hr>
-          <div class="panel-head compact"><div><p class="kicker">监控条件</p><h3>为这份简历单独设置</h3></div><label class="switch"><input v-model="conditionForm.monitor_enabled" type="checkbox" :disabled="selectedResume.status !== 'ready'" @change="saveConditions"><span></span>参与匹配</label></div>
-          <div class="condition-grid">
-            <label>岗位关键词<input v-model.trim="conditionForm.job_keyword" placeholder="Python 后端"></label>
-            <div class="field"><span>城市</span><select-menu v-model="conditionForm.city" :options="optionsWithCurrent(cityOptions, conditionForm.city, 'name')" label-key="name" value-key="name" aria-label="城市"></select-menu></div>
-            <div class="field"><span>工作经验</span><select-menu v-model="conditionForm.experience" :options="optionsWithCurrent(experienceOptions, conditionForm.experience)" aria-label="工作经验"></select-menu></div>
-            <div class="field"><span>学历</span><select-menu v-model="conditionForm.degree" :options="optionsWithCurrent(degreeOptions, conditionForm.degree)" aria-label="学历"></select-menu></div>
-            <div class="field"><span>薪资</span><select-menu v-model="conditionForm.salary" :options="optionsWithCurrent(salaryOptions, conditionForm.salary)" aria-label="薪资"></select-menu></div>
-            <div class="field"><span>监控页数</span><select-menu v-model="conditionForm.pages" :options="pageOptions" aria-label="监控页数"></select-menu></div>
-          </div>
-          <div class="condition-actions"><button class="secondary" type="button" :disabled="busy.resume" @click="saveConditions">保存条件</button></div>
         </article>
         <article v-else class="panel empty-detail"><p>选择左侧简历查看解析结果和匹配条件。</p></article>
       </section>
 
       <section v-if="route === '/matches'" class="match-stack">
-        <article class="match-command-bar" aria-label="匹配控制台">
-          <div class="match-readiness" aria-label="准备状态">
-            <span><b :class="{ ready: llm.tested_at && llm.key_configured }"></b>LLM {{ llm.tested_at && llm.key_configured ? '已就绪' : '待配置' }}</span>
-            <span><b :class="{ ready: eligibleResumes.length }"></b>{{ eligibleResumes.length }} 份可参与</span>
-            <span><b :class="{ ready: boss.state === 'ready' }"></b>BOSS {{ bossLabel }}</span>
+        <article class="panel monitor-panel" aria-label="执行监控">
+          <div class="panel-head compact">
+            <div><p class="kicker">执行监控</p><h3>设置条件 → 检查 BOSS → 采集过滤</h3></div>
+            <span class="badge" :class="boss.state === 'ready' ? 'ok' : 'warn'">BOSS {{ bossLabel }}</span>
           </div>
-          <div class="match-command">
-            <span>匹配简历</span>
-            <select-menu id="match-resume" v-model="resultResumeId" :options="matchResumeOptions" placeholder="选择一份可参与的简历" :disabled="matchStatus.status === 'running'" aria-label="匹配简历" @change="selectMatchResume"></select-menu>
-            <button class="primary match-trigger" type="button" :disabled="!canStartMatch" @click="startMatch">{{ matchButtonLabel }}</button>
+          <div class="condition-grid">
+            <label>岗位关键词<input v-model.trim="monitorForm.job_keyword" placeholder="Python 后端"></label>
+            <div class="field"><span>城市</span><select-menu v-model="monitorForm.city" :options="optionsWithCurrent(cityOptions, monitorForm.city, 'name')" label-key="name" value-key="name" aria-label="城市"></select-menu></div>
+            <div class="field"><span>工作经验</span><select-menu v-model="monitorForm.experience" :options="optionsWithCurrent(experienceOptions, monitorForm.experience)" aria-label="工作经验"></select-menu></div>
+            <div class="field"><span>学历</span><select-menu v-model="monitorForm.degree" :options="optionsWithCurrent(degreeOptions, monitorForm.degree)" aria-label="学历"></select-menu></div>
+            <div class="field"><span>薪资</span><select-menu v-model="monitorForm.salary" :options="optionsWithCurrent(salaryOptions, monitorForm.salary)" aria-label="薪资"></select-menu></div>
+            <div class="field"><span>监控页数</span><select-menu v-model="monitorForm.pages" :options="pageOptions" aria-label="监控页数"></select-menu></div>
           </div>
-          <div class="signal-actions" aria-label="BOSS 环境操作"><button class="secondary" type="button" :disabled="busy.boss" @click="checkBoss">检查状态</button><button class="secondary" type="button" :disabled="busy.boss" @click="setupBoss">打开 Chrome</button></div>
+          <div class="monitor-actions">
+            <button class="secondary" type="button" :disabled="busy.boss || matchStatus.status === 'running'" @click="checkBoss">{{ busy.boss ? '检查中…' : '检查状态' }}</button>
+            <button class="secondary" type="button" :disabled="busy.boss || matchStatus.status === 'running'" @click="setupBoss">打开 Chrome</button>
+            <button class="primary" type="button" :disabled="!canSaveConditions" @click="saveMonitorConditions">{{ busy.monitor ? '正在保存…' : '保存条件' }}</button>
+            <button class="primary" type="button" :disabled="!canStartMonitor" @click="startMonitor">{{ matchStatus.status === 'running' && matchStatus.task === 'monitor' ? '监控中…' : '执行监控' }}</button>
+          </div>
+          <ol class="pipeline">
+            <li v-for="stage in monitorStages" :key="stage.key" :class="stageClass(stage.key, 'monitor')"><span>{{ stage.code }}</span><strong>{{ stage.label }}</strong></li>
+          </ol>
         </article>
 
-        <article class="panel pipeline-panel">
-          <div class="pipeline-intro"><p class="kicker">匹配信号轨</p><span class="mono">{{ matchStatus.progress_current }}/{{ matchStatus.progress_total }}</span><p>{{ matchStatus.message || '选择简历后，按配置采集并匹配岗位。' }}</p></div>
+        <article class="panel match-panel" aria-label="匹配简历">
+          <div class="panel-head compact">
+            <div><p class="kicker">匹配简历</p><h3>选择简历，对新发现或变化的岗位评分</h3></div>
+            <span class="badge" :class="llm.tested_at && llm.key_configured ? 'ok' : 'warn'">LLM {{ llm.tested_at && llm.key_configured ? '已就绪' : '待配置' }}</span>
+          </div>
+          <div class="match-command">
+            <select-menu id="match-resume" v-model="resultResumeId" :options="matchResumeOptions" :placeholder="`选择简历（${eligibleResumes.length} 份可参与）`" :disabled="matchStatus.status === 'running'" aria-label="匹配简历" @change="selectMatchResume"></select-menu>
+            <button class="primary match-trigger" type="button" :disabled="!canStartMatch" @click="startMatch">{{ matchButtonLabel }}</button>
+          </div>
           <ol class="pipeline">
-            <li v-for="stage in stages" :key="stage.key" :class="stageClass(stage.key)"><span>{{ stage.code }}</span><strong>{{ stage.label }}</strong></li>
+            <li v-for="stage in matchStages" :key="stage.key" :class="stageClass(stage.key, 'match')"><span>{{ stage.code }}</span><strong>{{ stage.label }}</strong></li>
           </ol>
+          <p class="pipeline-message">{{ matchStatus.message || '执行监控后，选择简历开始匹配。' }}</p>
         </article>
 
         <article class="panel results-panel">

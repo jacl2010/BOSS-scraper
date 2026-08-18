@@ -81,7 +81,7 @@ createApp({
       llm: { base_url: '', model: '', key_configured: false, api_key_masked: '', tested_at: null, thinking_enabled: true, reasoning_effort: 'low' },
       llmForm: { base_url: '', model: '', api_key: '', thinking_enabled: true, reasoning_effort: 'low' },
       resumes: [], selectedResumeId: '', resultResumeId: '',
-      conditionForm: { job_keyword: '', city: '北京', experience: '不限', degree: '不限', salary: '不限', pages: 2, monitor_enabled: false },
+      monitorForm: { job_keyword: '', city: '北京', experience: '不限', degree: '不限', salary: '不限', pages: 2 }, monitorSaved: false,
       cityOptions: window.CITY_OPTIONS || [],
       experienceOptions: ['1-3年', '3-5年', '5-10年', '10年以上'],
       degreeOptions: ['大专', '本科', '硕士', '博士'],
@@ -91,26 +91,28 @@ createApp({
       boss: { state: 'unknown', message: '' },
       matchStatus: { status: 'idle', stage: 'idle', progress_current: 0, progress_total: 0, message: '' },
       results: { new_published: [], new_active: [], collection_summary: null }, resultTab: 'new_published', runningResumeId: '',
-      busy: { llm: false, upload: false, resume: false, boss: false },
+      busy: { llm: false, upload: false, resume: false, boss: false, monitor: false },
       notice: { type: 'info', text: '' }, successDialog: { open: false, text: '' }, pollTimer: null,
-      stages: [
+      monitorStages: [
         { key: 'checking', code: '01', label: '检查' }, { key: 'scraping', code: '02', label: '采集' },
-        { key: 'filtering', code: '03', label: '过滤' }, { key: 'scoring', code: '04', label: '评分' },
-        { key: 'finalizing', code: '05', label: '整理' },
+        { key: 'filtering', code: '03', label: '过滤' },
+      ],
+      matchStages: [
+        { key: 'scoring', code: '04', label: '评分' }, { key: 'finalizing', code: '05', label: '整理' },
       ],
     };
   },
   computed: {
     pageMeta() {
       return {
-        '/resumes': { eyebrow: 'RESUME WORKBENCH', title: '简历管理', description: '上传文本型 PDF，检查 AI 摘要，并为每份简历保存独立条件。' },
+        '/resumes': { eyebrow: 'RESUME WORKBENCH', title: '简历管理', description: '上传文本型 PDF，检查 AI 摘要；解析成功的简历默认参与匹配。' },
         '/matches': { eyebrow: 'MANUAL MATCH RUN', title: 'BOSS 岗位匹配', description: '按这份简历的条件采集岗位，只对新发现或内容变化的职位进行评分。' },
         '/llm': { eyebrow: 'MODEL CONNECTION', title: 'LLM API Key', description: '' },
       }[this.route] || { eyebrow: '', title: '', description: '' };
     },
     selectedResume() { return this.resumes.find((item) => item.id === this.selectedResumeId); },
     resultResume() { return this.resumes.find((item) => item.id === this.resultResumeId); },
-    eligibleResumes() { return this.resumes.filter((item) => item.status === 'ready' && item.monitor_enabled && this.conditionsComplete(item.conditions)); },
+    eligibleResumes() { return this.resumes.filter((item) => item.status === 'ready'); },
     matchResumeOptions() { return this.eligibleResumes.map((resume) => ({ value: resume.id, label: resume.profile?.title || resume.filename })); },
     newActiveResults() {
       return [...(this.results.new_published || []), ...(this.results.new_active || [])]
@@ -119,14 +121,13 @@ createApp({
     currentResults() { return this.resultTab === 'new_active' ? this.newActiveResults : (this.results.new_published || []); },
     resultQuery() {
       const source = this.collectionSummary?.filters || this.results.query || this.results.conditions || this.results.search_conditions || {};
-      const fallback = this.resultResume?.conditions || {};
       return {
-        keyword: source.keyword || source.job_keyword || this.results.keyword || this.results.job_keyword || fallback.job_keyword || '—',
-        city: source.city || this.results.city || fallback.city || '北京（默认）',
-        experience: source.experience || this.results.experience || fallback.experience || '不限',
-        degree: source.degree || this.results.degree || fallback.degree || '不限',
-        salary: source.salary || this.results.salary || fallback.salary || '不限',
-        pages: source.pages || this.results.pages || fallback.pages || 2,
+        keyword: source.keyword || source.job_keyword || this.monitorForm.job_keyword || '—',
+        city: source.city || this.monitorForm.city || '北京（默认）',
+        experience: source.experience || this.monitorForm.experience || '不限',
+        degree: source.degree || this.monitorForm.degree || '不限',
+        salary: source.salary || this.monitorForm.salary || '不限',
+        pages: source.pages || this.monitorForm.pages || 2,
       };
     },
     collectionSummary() {
@@ -143,6 +144,12 @@ createApp({
       return Boolean(this.resultResumeId === this.results.resume_id && this.results.last_completed_at);
     },
     matchButtonLabel() { return this.hasMatchedSelectedResume ? '继续匹配' : '开始匹配'; },
+    canSaveConditions() {
+      return !this.busy.monitor && Boolean(this.monitorForm.job_keyword?.trim() && this.monitorForm.city?.trim());
+    },
+    canStartMonitor() {
+      return this.matchStatus.status !== 'running' && this.monitorSaved && this.boss.state === 'ready';
+    },
     canStartMatch() {
       return this.matchStatus.status !== 'running' && this.llm.tested_at && this.llm.key_configured
         && this.selectedMatchIsEligible;
@@ -152,7 +159,7 @@ createApp({
   },
   async mounted() {
     addEventListener('hashchange', this.onRouteChange);
-    await Promise.all([this.loadLlm(), this.loadResumes(), this.loadMatchStatus()]);
+    await Promise.all([this.loadLlm(), this.loadResumes(), this.loadMatchStatus(), this.loadMonitorSettings()]);
     if (this.matchStatus.status === 'running') this.beginPolling();
   },
   beforeUnmount() { removeEventListener('hashchange', this.onRouteChange); this.stopPolling(); },
@@ -191,9 +198,29 @@ createApp({
         this.resultResumeId = ''; this.results = { new_published: [], new_active: [], collection_summary: null };
       }
     },
-    selectResume(id) {
-      this.selectedResumeId = id; const resume = this.resumes.find((item) => item.id === id); const c = resume?.conditions || {};
-      this.conditionForm = { job_keyword: c.job_keyword || '', city: c.city || '北京', experience: c.experience || '不限', degree: c.degree || '不限', salary: c.salary || '不限', pages: c.pages || 2, monitor_enabled: Boolean(resume?.monitor_enabled) };
+    selectResume(id) { this.selectedResumeId = id; },
+    async loadMonitorSettings() {
+      try {
+        const data = await this.api('/api/monitor-settings');
+        if (data?.conditions) {
+          this.monitorForm = { ...this.monitorForm, ...data.conditions };
+          this.monitorSaved = true;
+        }
+      } catch (error) { this.flash(error.message, 'error'); }
+    },
+    async saveMonitorConditions() {
+      this.busy.monitor = true;
+      try {
+        await this.api('/api/monitor-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(this.monitorForm) });
+        this.monitorSaved = true; this.showSuccess('监控条件已保存');
+      } catch (error) { this.flash(error.message, 'error'); } finally { this.busy.monitor = false; }
+    },
+    async startMonitor() {
+      if (!this.canStartMonitor) return;
+      try {
+        this.matchStatus = await this.api('/api/monitor', { method: 'POST' });
+        this.beginPolling();
+      } catch (error) { this.flash(error.message, 'error'); }
     },
     async uploadFiles(event) {
       const files = [...event.target.files]; event.target.value = ''; this.busy.upload = true;
@@ -204,12 +231,6 @@ createApp({
         catch (error) { this.flash(`${file.name}：${error.message}`, 'error'); }
       }
       this.busy.upload = false;
-    },
-    async saveConditions() {
-      if (!this.selectedResume) return; this.busy.resume = true;
-      const { monitor_enabled, ...conditions } = this.conditionForm;
-      try { const updated = await this.api(`/api/resumes/${this.selectedResume.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conditions, monitor_enabled }) }); this.replaceResume(updated); this.showSuccess('已保存'); }
-      catch (error) { this.conditionForm.monitor_enabled = false; this.flash(error.message, 'error'); } finally { this.busy.resume = false; }
     },
     async retryParse() { try { this.replaceResume(await this.api(`/api/resumes/${this.selectedResume.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ retry_parse: true }) })); } catch (error) { this.flash(error.message, 'error'); } },
     async deleteResume() {
@@ -230,7 +251,7 @@ createApp({
       } catch (error) { this.flash(error.message, 'error'); }
     },
     async loadMatchStatus() { this.matchStatus = await this.api('/api/matches/status'); },
-    beginPolling() { this.stopPolling(); this.pollTimer = setInterval(async () => { try { await this.loadMatchStatus(); if (['completed', 'failed'].includes(this.matchStatus.status)) { this.stopPolling(); const finishedResumeId = this.runningResumeId || this.matchStatus.current_resume_id; if (finishedResumeId) { this.resultResumeId = finishedResumeId; this.results = { new_published: [], new_active: [], collection_summary: null }; } this.runningResumeId = ''; await this.loadResumes(); if (this.resultResumeId) await this.loadResults(); } } catch (error) { this.stopPolling(); this.flash('本地服务已断开，请重新双击启动。', 'error'); } }, 1000); },
+    beginPolling() { this.stopPolling(); this.pollTimer = setInterval(async () => { try { await this.loadMatchStatus(); if (['completed', 'failed'].includes(this.matchStatus.status)) { this.stopPolling(); const finishedResumeId = this.runningResumeId || this.matchStatus.current_resume_id; if (this.matchStatus.task === 'match' && finishedResumeId) { this.resultResumeId = finishedResumeId; this.results = { new_published: [], new_active: [], collection_summary: null }; } this.runningResumeId = ''; await this.loadResumes(); if (this.matchStatus.status === 'completed' && this.matchStatus.message) this.flash(this.matchStatus.message, 'success'); if (this.matchStatus.status === 'failed') this.flash(this.matchStatus.message, 'error'); if (this.resultResumeId) await this.loadResults(); } } catch (error) { this.stopPolling(); this.flash('本地服务已断开，请重新双击启动。', 'error'); } }, 1000); },
     stopPolling() { if (this.pollTimer) clearInterval(this.pollTimer); this.pollTimer = null; },
     selectMatchResume() { this.results = { new_published: [], new_active: [], collection_summary: null }; this.loadResults(); },
     async loadResults() {
@@ -243,8 +264,17 @@ createApp({
       const hasCurrent = options.some((option) => (key ? option[key] : option) === value);
       return hasCurrent || !value ? options : [{ value, label: `当前值：${value}（请重新选择）` }, ...options];
     },
-    conditionsComplete(c) { return Boolean(c?.job_keyword?.trim() && c?.city?.trim() && c?.experience?.trim() && c?.degree?.trim() && c?.salary?.trim()); },
-    stageClass(key) { const order = this.stages.map((item) => item.key); const current = order.indexOf(this.matchStatus.stage); const index = order.indexOf(key); return { active: index === current && this.matchStatus.status === 'running', done: (current > index) || this.matchStatus.status === 'completed' }; },
+    stageClass(key, task) {
+      const stages = task === 'monitor' ? this.monitorStages : this.matchStages;
+      if (this.matchStatus.task !== task) {
+        const touched = task === 'monitor' ? ['checking', 'scraping', 'filtering'] : ['scoring', 'finalizing'];
+        return { active: false, done: touched.includes(this.matchStatus.stage) };
+      }
+      const order = stages.map((item) => item.key);
+      const current = order.indexOf(this.matchStatus.stage);
+      const index = order.indexOf(key);
+      return { active: index === current && this.matchStatus.status === 'running', done: (current > index) || this.matchStatus.status === 'completed' };
+    },
     resumeStatusLabel(status) { return ({ parsing: '解析中', ready: '已完成', parse_failed: '失败' })[status] || status; },
     formatTime(value) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'; },
     join(values) { return values?.length ? values.join('、') : '—'; },
