@@ -91,8 +91,11 @@
       <section v-if="route === '/matches'" class="match-stack">
         <article class="panel monitor-panel" aria-label="执行监控">
           <div class="panel-head compact">
-            <div><p class="kicker">执行监控</p><h3>设置条件 → 检查 BOSS → 采集过滤</h3></div>
-            <span class="badge" :class="boss.state === 'ready' ? 'ok' : 'warn'">BOSS {{ bossLabel }}</span>
+            <div><p class="kicker">执行监控</p><h3>设置条件 → 检查 BOSS → 采集岗位</h3></div>
+            <div class="head-badges">
+              <span v-if="monitorStageLabel" class="task-status" :class="{ running: monitorStageRunning, failed: matchStatus.status === 'failed' }"><i v-if="monitorStageRunning" class="spinner" aria-hidden="true"></i>{{ monitorStageLabel }}</span>
+              <span class="badge" :class="boss.state === 'ready' ? 'ok' : 'warn'">BOSS {{ bossLabel }}</span>
+            </div>
           </div>
           <div class="condition-grid">
             <label>岗位关键词<input v-model.trim="monitorForm.job_keyword" placeholder="Python 后端"></label>
@@ -108,23 +111,20 @@
             <button class="primary" type="button" :disabled="!canSaveConditions" @click="saveMonitorConditions">{{ busy.monitor ? '正在保存…' : '保存条件' }}</button>
             <button class="primary" type="button" :disabled="!canStartMonitor" @click="startMonitor">{{ matchStatus.status === 'running' && matchStatus.task === 'monitor' ? '监控中…' : '执行监控' }}</button>
           </div>
-          <ol class="pipeline">
-            <li v-for="stage in monitorStages" :key="stage.key" :class="stageClass(stage.key, 'monitor')"><span>{{ stage.code }}</span><strong>{{ stage.label }}</strong></li>
-          </ol>
         </article>
 
         <article class="panel match-panel" aria-label="匹配简历">
           <div class="panel-head compact">
             <div><p class="kicker">匹配简历</p><h3>选择简历，对新发现或变化的岗位评分</h3></div>
-            <span class="badge" :class="llm.tested_at && llm.key_configured ? 'ok' : 'warn'">LLM {{ llm.tested_at && llm.key_configured ? '已就绪' : '待配置' }}</span>
+            <div class="head-badges">
+              <span v-if="matchStageLabel" class="task-status" :class="{ running: matchStageRunning, failed: matchStatus.status === 'failed' }"><i v-if="matchStageRunning" class="spinner" aria-hidden="true"></i>{{ matchStageLabel }}</span>
+              <span class="badge" :class="llm.tested_at && llm.key_configured ? 'ok' : 'warn'">LLM {{ llm.tested_at && llm.key_configured ? '已就绪' : '待配置' }}</span>
+            </div>
           </div>
           <div class="match-command">
             <select-menu id="match-resume" v-model="resultResumeId" :options="matchResumeOptions" :placeholder="`选择简历（${eligibleResumes.length} 份可参与）`" :disabled="matchStatus.status === 'running'" aria-label="匹配简历" @change="selectMatchResume"></select-menu>
             <button class="primary match-trigger" type="button" :disabled="!canStartMatch" @click="startMatch">{{ matchButtonLabel }}</button>
           </div>
-          <ol class="pipeline">
-            <li v-for="stage in matchStages" :key="stage.key" :class="stageClass(stage.key, 'match')"><span>{{ stage.code }}</span><strong>{{ stage.label }}</strong></li>
-          </ol>
           <p class="pipeline-message">{{ matchStatus.message || '执行监控后，选择简历开始匹配。' }}</p>
         </article>
 

@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.boss import BossAdapter, active_bucket, experience_code, normalize_job, salary_code
-from app.matching import filter_jobs, select_candidate_pools, sort_scored_results
+from app.matching import select_candidate_pools, sort_scored_results
 from app.schemas import ResumeConditions, ScoredJob
 
 
@@ -148,40 +148,6 @@ def test_freeform_salary_only_uses_a_containing_upstream_bucket():
 def test_experience_alias_and_multiple_ranges_are_handled_without_loss():
     assert experience_code("10年") == "107"
     assert experience_code("5-10年,10年以上") is None
-
-    jobs = [
-        normalize_job({
-            "job_id": "five-to-ten", "title": "Python 工程师", "job_link": "https://example.test/1",
-            "jd": "Python", "location": "上海", "tags_list": "5-10年 | 本科", "salary": "20-30K",
-        }),
-        normalize_job({
-            "job_id": "over-ten", "title": "Python 工程师", "job_link": "https://example.test/2",
-            "jd": "Python", "location": "上海", "tags_list": "10年以上 | 本科", "salary": "20-30K",
-        }),
-    ]
-    conditions = ResumeConditions(
-        job_keyword="Python", city="上海", experience="5-10年,10年以上", degree="本科", salary="20-30K"
-    )
-
-    assert [job.id for job in filter_jobs(jobs, conditions)] == ["five-to-ten", "over-ten"]
-
-
-def test_five_hard_filters_keep_only_matching_job():
-    jobs = [normalize_job(item) for item in json.loads(FIXTURE_PATH.read_text())]
-    conditions = ResumeConditions(
-        job_keyword="Python", city="上海", experience="3-5年", degree="本科", salary="20-30K"
-    )
-
-    assert [job.id for job in filter_jobs(jobs, conditions)] == ["new-job"]
-
-
-def test_city_code_is_not_compared_to_chinese_detail_location():
-    job = normalize_job(json.loads(FIXTURE_PATH.read_text())[0])
-    conditions = ResumeConditions(
-        job_keyword="Python", city="101020100", experience="3-5年", degree="本科", salary="20-30K"
-    )
-
-    assert [item.id for item in filter_jobs([job], conditions)] == ["new-job"]
 
 
 def test_first_discovery_and_active_transition_pools_are_exclusive():

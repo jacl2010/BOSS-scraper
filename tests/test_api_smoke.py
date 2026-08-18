@@ -49,7 +49,7 @@ def test_match_page_splits_monitor_and_match_signal_tracks():
     script = (Path(__file__).parents[1] / "app" / "web" / "app.js").read_text(encoding="utf-8")
     template = (Path(__file__).parents[1] / "app" / "web" / "index.html").read_text(encoding="utf-8")
 
-    assert "monitorStages" in script and "matchStages" in script
+    assert "monitorStageLabel" in script and "matchStageLabel" in script
     assert "startMonitor" in script and "saveMonitorConditions" in script
     assert "{{ matchStatus.task }}" not in template
     assert "执行监控" in template

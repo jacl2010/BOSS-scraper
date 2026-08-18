@@ -2,70 +2,17 @@
 
 from __future__ import annotations
 
-import re
 import threading
 from dataclasses import dataclass
 
 from app.database import Database
-from app.schemas import CanonicalJob, MatchResult, MatchStatus, ResumeConditions, ResumeProfile, ScoredJob
+from app.schemas import CanonicalJob, MatchResult, MatchStatus, ResumeProfile, ScoredJob
 
 
 @dataclass
 class CandidatePools:
     new_published: list[CanonicalJob]
     new_active: list[CanonicalJob]
-
-
-def _unlimited(value: str | None) -> bool:
-    return not value or value.strip() in {"不限", "全部", "any"}
-
-
-def _same_requirement(expected: str, actual: str | None) -> bool:
-    return _unlimited(expected) or (actual is not None and expected.strip().lower() in actual.strip().lower())
-
-
-def _same_experience_requirement(expected: str, actual: str | None) -> bool:
-    if _unlimited(expected):
-        return True
-    if actual is None:
-        return False
-    choices = [item.strip() for item in re.split(r"[,，]", expected) if item.strip()]
-    aliases = {"10年": "10年以上"}
-    actual_value = aliases.get(actual.strip(), actual.strip())
-    return any(aliases.get(item, item) == actual_value for item in choices)
-
-
-def _salary(value: str) -> tuple[float | None, float | None]:
-    range_match = re.search(
-        r"(\d+(?:\.\d+)?)\s*[kK]?\s*[-~～至]\s*(\d+(?:\.\d+)?)\s*[kK]", value
-    )
-    if range_match:
-        return float(range_match.group(1)), float(range_match.group(2))
-    amounts = [float(item) for item in re.findall(r"(\d+(?:\.\d+)?)\s*[kK]", value)]
-    return (amounts[0], amounts[-1]) if amounts else (None, None)
-
-
-def filter_jobs(jobs: list[CanonicalJob], conditions: ResumeConditions) -> list[CanonicalJob]:
-    wanted_min, wanted_max = _salary(conditions.salary)
-    # The collector accepts a nine-digit city code and resolves it before
-    # scraping.  Detail records contain a Chinese location, so comparing the
-    # original code to that string would incorrectly discard every result.
-    city_is_code = re.fullmatch(r"\d{9}", conditions.city.strip()) is not None
-    result: list[CanonicalJob] = []
-    for job in jobs:
-        haystack = f"{job.title} {job.jd_text}".lower()
-        salary_matches = _unlimited(conditions.salary) or (
-            wanted_min is not None and job.salary_min_k is not None and job.salary_max_k is not None
-            and job.salary_max_k >= wanted_min and (wanted_max is None or job.salary_min_k <= wanted_max)
-        )
-        if (
-            conditions.job_keyword.lower() in haystack and (city_is_code or _same_requirement(conditions.city, job.city))
-            and _same_experience_requirement(conditions.experience, job.experience)
-            and _same_requirement(conditions.degree, job.degree)
-            and salary_matches
-        ):
-            result.append(job)
-    return result
 
 
 def select_candidate_pools(
@@ -149,12 +96,10 @@ class MatchRunner:
                 self.database.save_collection_summary(summary)
             for job in jobs:
                 self.database.upsert_job(job)
-            self._update(stage="filtering", message="正在筛选岗位")
-            kept = filter_jobs(jobs, conditions)
             self._update(progress_current=1)
             self._update(
                 status="completed", stage="completed",
-                message=f"监控完成：共采集 {len(jobs)} 个岗位，过滤后 {len(kept)} 个可匹配，请选择简历开始匹配",
+                message=f"监控完成：共采集 {len(jobs)} 个岗位，请选择简历开始匹配",
             )
         except Exception as exc:
             self._update(status="failed", stage="failed", message=str(exc))
@@ -162,9 +107,6 @@ class MatchRunner:
     def _run_match(self, resume: dict) -> None:
         try:
             settings = self.llm.current_settings()
-            # Jobs are only ever written by a monitor run, which itself requires
-            # saved conditions, so this lookup cannot miss in practice.
-            conditions = self.database.get_monitor_settings()["conditions"]
             jobs = self.database.list_jobs()
             previous_buckets, previous_active_statuses, newly_seen, changed_ids = {}, {}, set(), set()
             previous_states = self.database.get_resume_job_states(resume["id"], [job.id for job in jobs])
@@ -176,8 +118,9 @@ class MatchRunner:
                 previous_active_statuses[job.id] = previous["active_status_raw"]
                 if previous["matching_content_hash"] != self.database._matching_content_hash(job):
                     changed_ids.add(job.id)
+            # 监控条件只用于采集参数，匹配不做确定性过滤，相关性完全交给 LLM 判断。
             pools = select_candidate_pools(
-                filter_jobs(jobs, conditions), previous_buckets, newly_seen, changed_ids, previous_active_statuses
+                jobs, previous_buckets, newly_seen, changed_ids, previous_active_statuses
             )
             profile = ResumeProfile.model_validate_json(resume["profile_json"])
             results: list[MatchResult] = []

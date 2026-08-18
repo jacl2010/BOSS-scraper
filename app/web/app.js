@@ -93,16 +93,21 @@ createApp({
       results: { new_published: [], new_active: [], collection_summary: null }, resultTab: 'new_published', runningResumeId: '',
       busy: { llm: false, upload: false, resume: false, boss: false, monitor: false },
       notice: { type: 'info', text: '' }, successDialog: { open: false, text: '' }, pollTimer: null,
-      monitorStages: [
-        { key: 'checking', code: '01', label: '检查' }, { key: 'scraping', code: '02', label: '采集' },
-        { key: 'filtering', code: '03', label: '过滤' },
-      ],
-      matchStages: [
-        { key: 'scoring', code: '04', label: '评分' }, { key: 'finalizing', code: '05', label: '整理' },
-      ],
     };
   },
   computed: {
+    monitorStageLabel() {
+      if (this.matchStatus.task !== 'monitor') return '';
+      const labels = { checking: '检查中', scraping: '采集中', completed: '采集完成', failed: '执行失败' };
+      return labels[this.matchStatus.stage] || '执行中';
+    },
+    monitorStageRunning() { return this.matchStatus.task === 'monitor' && this.matchStatus.status === 'running'; },
+    matchStageLabel() {
+      if (this.matchStatus.task !== 'match') return '';
+      const labels = { scoring: '评分中', finalizing: '整理中', completed: '整理完成', failed: '匹配失败' };
+      return labels[this.matchStatus.stage] || '匹配中';
+    },
+    matchStageRunning() { return this.matchStatus.task === 'match' && this.matchStatus.status === 'running'; },
     pageMeta() {
       return {
         '/resumes': { eyebrow: 'RESUME WORKBENCH', title: '简历管理', description: '上传文本型 PDF，检查 AI 摘要；解析成功的简历默认参与匹配。' },
@@ -263,17 +268,6 @@ createApp({
     optionsWithCurrent(options, value, key = '') {
       const hasCurrent = options.some((option) => (key ? option[key] : option) === value);
       return hasCurrent || !value ? options : [{ value, label: `当前值：${value}（请重新选择）` }, ...options];
-    },
-    stageClass(key, task) {
-      const stages = task === 'monitor' ? this.monitorStages : this.matchStages;
-      if (this.matchStatus.task !== task) {
-        const touched = task === 'monitor' ? ['checking', 'scraping', 'filtering'] : ['scoring', 'finalizing'];
-        return { active: false, done: touched.includes(this.matchStatus.stage) };
-      }
-      const order = stages.map((item) => item.key);
-      const current = order.indexOf(this.matchStatus.stage);
-      const index = order.indexOf(key);
-      return { active: index === current && this.matchStatus.status === 'running', done: (current > index) || this.matchStatus.status === 'completed' };
     },
     resumeStatusLabel(status) { return ({ parsing: '解析中', ready: '已完成', parse_failed: '失败' })[status] || status; },
     formatTime(value) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'; },
